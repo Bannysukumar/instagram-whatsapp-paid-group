@@ -146,10 +146,12 @@ export async function processMembership({ registration, settings, config, whatsa
   }
 
   const reason = [addResult?.contact?.reason, addResult?.reason].filter(Boolean).join('; ') || 'direct_add_unavailable';
-  return withContact(finishWithInvite({
+  const held = withContact(finishWithInvite({
     link,
     admissionMode: settings.admissionMode,
     action: 'direct_add_unavailable',
     actionNote: reason,
   }));
+  if (String(reason).includes('interface_changed')) return { ...held, retryable: true };
+  return held;
 }

@@ -17,6 +17,17 @@ async function readSignals(page) {
   });
 }
 
+export async function dismissWhatsAppPopups(page) {
+  const dialog = page.locator('[role="dialog"]').filter({ hasText: /what'?s new on whatsapp/i }).last();
+  if (!(await dialog.isVisible().catch(() => false))) return;
+  const close = dialog.getByRole('button', { name: /close|continue|ok|got it|not now/i }).first();
+  const icon = dialog.locator('[data-icon="x"], [data-icon="close"], [aria-label="Close"]').first();
+  if (await close.isVisible().catch(() => false)) await close.click();
+  else if (await icon.isVisible().catch(() => false)) await icon.click();
+  else await dialog.locator('button').first().click().catch(() => {});
+  await page.waitForTimeout(1000);
+}
+
 export async function detectPageLoginState(page) {
   await page.goto('https://web.whatsapp.com/', { waitUntil: 'domcontentloaded', timeout: 45000 });
   const deadline = Date.now() + 20000;
@@ -24,7 +35,10 @@ export async function detectPageLoginState(page) {
   while (Date.now() < deadline) {
     signals = await readSignals(page);
     const state = classifyLoginSignals(signals);
-    if (state !== 'unknown') return state;
+    if (state !== 'unknown') {
+      if (state === 'authenticated') await dismissWhatsAppPopups(page);
+      return state;
+    }
     await page.waitForTimeout(500);
   }
   return classifyLoginSignals(signals);
@@ -266,6 +280,7 @@ async function verifyContactSaved(page, { name, phone }) {
  * It does not send messages or repeat the attempt.
  */
 export async function tryAddParticipant(page, { groupName, phone, inviteLink, contactName }) {
+  await dismissWhatsAppPopups(page);
   const contact = await saveContact(page, { name: contactName, phone });
   if (!contact.saved) {
     return { outcome: 'not_selectable', reason: 'contact_not_saved', contact };
@@ -290,6 +305,7 @@ export async function tryAddParticipant(page, { groupName, phone, inviteLink, co
   }
 
   await pause(page, 2000);
+  await dismissWhatsAppPopups(page);
   await page.locator('#main header').first().click({ timeout: 8000 }).catch(() => {});
   await pause(page, 1500);
 
