@@ -23,20 +23,23 @@ async function centeredContinuePoint(page) {
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     let node = walker.nextNode();
     while (node) {
-      if (/^continue$/i.test((node.textContent || '').trim()) && node.parentElement) {
-        const rect = node.parentElement.getBoundingClientRect();
-        const style = getComputedStyle(node.parentElement);
+      const value = (node.textContent || '').replace(/\s+/g, ' ').trim();
+      if (/^continue$/i.test(value)) {
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const rect = range.getBoundingClientRect();
         const x = rect.x + rect.width / 2;
         const y = rect.y + rect.height / 2;
-        const centered = x > window.innerWidth * 0.2 && x < window.innerWidth * 0.8
-          && y > window.innerHeight * 0.2 && y < window.innerHeight * 0.9;
-        if (centered && rect.width >= 8 && rect.height >= 8 && style.visibility !== 'hidden' && style.display !== 'none') {
-          hits.push({ x, y, area: rect.width * rect.height });
+        const centered = x > window.innerWidth * 0.15 && x < window.innerWidth * 0.85
+          && y > window.innerHeight * 0.15 && y < window.innerHeight * 0.92;
+        if (centered && rect.width >= 4 && rect.height >= 4) {
+          const target = node.parentElement?.closest('button, [role="button"], div') || node.parentElement;
+          target?.click();
+          hits.push({ x, y });
         }
       }
       node = walker.nextNode();
     }
-    hits.sort((a, b) => b.area - a.area);
     return hits[0] || null;
   }).catch(() => null);
 }
@@ -342,12 +345,20 @@ export async function tryAddParticipant(page, { groupName, phone, inviteLink, co
   await dismissWhatsAppPopups(page);
   await page.locator('#main header').first().click({ timeout: 8000 }).catch(() => {});
   await pause(page, 1500);
+  await dismissWhatsAppPopups(page);
 
   const addButton = page.getByRole('button', { name: /add participant|add member|add members/i }).first();
   if (!(await addButton.isVisible().catch(() => false))) {
     return { outcome: 'ui_unavailable', reason: 'add_control_missing', contact: { ...contact, ...verified } };
   }
-  await addButton.click();
+  const addClicked = await addButton.click({ timeout: 8000 }).then(() => true).catch(() => false);
+  if (!addClicked) {
+    await dismissWhatsAppPopups(page);
+    const retried = await addButton.click({ timeout: 8000 }).then(() => true).catch(() => false);
+    if (!retried) {
+      return { outcome: 'ui_unavailable', reason: 'add_control_missing', contact: { ...contact, ...verified } };
+    }
+  }
   await pause(page, 2000);
 
   const dialog = page.locator('[role="dialog"]').last();
