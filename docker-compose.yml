@@ -1,0 +1,11 @@
+# Optional MongoDB for local development.
+# Run the React app and the Playwright worker on the host so the QR-code window is visible.
+services:
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+volumes:
+  mongo-data:

@@ -1,0 +1,129 @@
+:root {
+  color: #1c1917;
+  background: #f3efe6;
+  font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+  line-height: 1.5;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+}
+
+a { color: #0f6e56; }
+
+.shell {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 20px 16px 48px;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.brand {
+  color: inherit;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+nav {
+  display: flex;
+  gap: 16px;
+}
+
+h1 { font-size: 2rem; line-height: 1.15; margin: 0 0 12px; }
+h2 { font-size: 1.15rem; margin: 0 0 8px; }
+
+.hero p, .notice p { margin: 0; }
+
+.card {
+  background: #fffdf8;
+  border: 1px solid #e6dfd2;
+  border-radius: 16px;
+  padding: 18px;
+  margin: 16px 0;
+}
+
+.form {
+  display: grid;
+  gap: 14px;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  font-weight: 600;
+}
+
+input, select, button {
+  font: inherit;
+}
+
+input, select {
+  width: 100%;
+  border: 1px solid #d6d0c4;
+  background: #fff;
+  border-radius: 10px;
+  padding: 12px;
+}
+
+button {
+  border: 0;
+  border-radius: 999px;
+  padding: 12px 18px;
+  background: #0f6e56;
+  color: white;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:disabled { opacity: 0.6; cursor: default; }
+button.secondary { background: #44403c; }
+
+.check {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-weight: 500;
+}
+
+.check input { width: auto; margin-top: 4px; }
+
+.optional, .muted, .eyebrow { color: #57534e; font-weight: 500; }
+.field-error, .form-error { color: #9f1239; font-weight: 600; }
+.success { color: #0f6e56; font-weight: 600; }
+.invite { font-weight: 700; }
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.stat strong { display: block; font-size: 1.6rem; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.spread { justify-content: space-between; }
+
+.search { display: flex; gap: 8px; }
+.search input { flex: 1; }
+
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid #eee6d8; }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: #f7f3ea; }
+
+.logs { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.logs li { display: grid; gap: 2px; }
+
+@media (max-width: 640px) {
+  h1 { font-size: 1.6rem; }
+  .search, .topbar { flex-direction: column; align-items: stretch; }
+}
