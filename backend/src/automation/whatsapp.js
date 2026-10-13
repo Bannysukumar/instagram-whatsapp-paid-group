@@ -17,18 +17,47 @@ async function readSignals(page) {
   });
 }
 
+async function introPopupOpen(page) {
+  return page.evaluate(() => /what.?s new on whatsapp web/i.test(document.body?.innerText || '')).catch(() => false);
+}
+
+async function continueButtonPoint(page) {
+  return page.evaluate(() => {
+    const hits = [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    while (node) {
+      if (/^continue$/i.test((node.textContent || '').trim()) && node.parentElement) {
+        const rect = node.parentElement.getBoundingClientRect();
+        const style = getComputedStyle(node.parentElement);
+        if (rect.width >= 8 && rect.height >= 8 && style.visibility !== 'hidden' && style.display !== 'none') {
+          hits.push({
+            x: rect.x + rect.width / 2,
+            y: rect.y + rect.height / 2,
+            area: rect.width * rect.height,
+          });
+        }
+      }
+      node = walker.nextNode();
+    }
+    hits.sort((a, b) => b.area - a.area);
+    return hits[0] || null;
+  }).catch(() => null);
+}
+
 export async function dismissWhatsAppPopups(page) {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const title = page.getByText(/what'?s new on whatsapp web/i).first();
-    if (!(await title.isVisible().catch(() => false))) return;
-    const continueText = page.getByText(/^continue$/i).last();
-    const continueButton = page.getByRole('button', { name: /continue/i }).last();
-    if (await continueText.isVisible().catch(() => false)) {
-      await continueText.click({ force: true }).catch(() => {});
-    } else if (await continueButton.isVisible().catch(() => false)) {
-      await continueButton.click({ force: true }).catch(() => {});
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    if (!(await introPopupOpen(page))) return;
+    const point = await continueButtonPoint(page);
+    if (point) {
+      await page.mouse.click(point.x, point.y).catch(() => {});
     } else {
-      await page.keyboard.press('Escape').catch(() => {});
+      const continueText = page.getByText(/^continue$/i).last();
+      if (await continueText.isVisible().catch(() => false)) {
+        await continueText.click({ force: true }).catch(() => {});
+      } else {
+        await page.keyboard.press('Escape').catch(() => {});
+      }
     }
     await page.waitForTimeout(1000);
   }
