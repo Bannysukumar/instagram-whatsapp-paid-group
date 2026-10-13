@@ -101,13 +101,18 @@ export function AdminDashboardPage() {
       cache: 'no-store',
     })
       .then((response) => (response.ok ? response.blob() : null))
-      .then((blob) => {
-        if (!blob || cancelled) return;
-        const nextUrl = URL.createObjectURL(blob);
-        setShotUrl((current) => {
-          if (current) URL.revokeObjectURL(current);
-          return nextUrl;
-        });
+      .then((blob) => new Promise((resolve) => {
+        if (!blob || cancelled) {
+          resolve('');
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => resolve('');
+        reader.readAsDataURL(blob);
+      }))
+      .then((nextUrl) => {
+        if (!cancelled && nextUrl) setShotUrl(nextUrl);
       })
       .catch(() => undefined);
     return () => {
