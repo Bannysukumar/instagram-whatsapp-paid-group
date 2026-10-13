@@ -13,15 +13,30 @@ const STATUS_LABELS = {
   failed: 'Failed',
 };
 
+const PAYMENT_LABELS = {
+  not_required: 'Not required',
+  pending: 'Pending',
+  verified: 'Verified',
+  failed: 'Failed',
+};
+
 const STATS = [
-  ['total', 'Total registrations'],
+  ['total', 'Registrations'],
+  ['completed', 'Added in group'],
+  ['inviteReady', 'Invitation ready'],
+  ['pendingAdmission', 'Pending admission'],
+  ['failed', 'Failed'],
   ['pendingPayments', 'Pending payments'],
   ['verifiedPayments', 'Verified payments'],
-  ['pendingAdmission', 'Pending admission'],
-  ['inviteReady', 'Invitation ready'],
-  ['completed', 'Added in group'],
-  ['failed', 'Failed tasks'],
 ];
+
+const SESSION_LABELS = {
+  authenticated: 'Connected',
+  qr_required: 'Waiting for a scan',
+  unknown: 'Not checked yet',
+  disabled: 'Turned off',
+  error: 'Browser problem',
+};
 
 function contactStatusLabel(saved) {
   if (saved === true) return 'Saved';
@@ -29,13 +44,23 @@ function contactStatusLabel(saved) {
   return 'Not tried yet';
 }
 
-const SESSION_HELP = {
-  authenticated: 'WhatsApp Web is logged in on the saved browser profile.',
-  qr_required: 'Scan the QR code below with the WhatsApp account that manages the group.',
-  unknown: 'The session has not been checked yet.',
-  disabled: 'Browser automation is turned off.',
-  error: 'The browser did not start. Install Chromium with npm run playwright:install in the backend folder.',
-};
+function readImage(path, token) {
+  return fetch(`${path}?ts=${Date.now()}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    cache: 'no-store',
+  })
+    .then((response) => (response.ok ? response.blob() : null))
+    .then((blob) => new Promise((resolve) => {
+      if (!blob) {
+        resolve('');
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => resolve('');
+      reader.readAsDataURL(blob);
+    }));
+}
 
 export function AdminDashboardPage() {
   const navigate = useNavigate();
@@ -49,6 +74,10 @@ export function AdminDashboardPage() {
   const [error, setError] = useState('');
   const [confirmed, setConfirmed] = useState(false);
   const [shotUrl, setShotUrl] = useState('');
+  const [qrUrl, setQrUrl] = useState('');
+  const [waView, setWaView] = useState(null);
+  const [logoutArmed, setLogoutArmed] = useState(false);
+  const [waBusy, setWaBusy] = useState(false);
 
   function handleAuthError(err) {
     if (err.status === 401) {
@@ -87,38 +116,46 @@ export function AdminDashboardPage() {
   }, [navigate]);
 
   useEffect(() => {
-    if (!automation?.queueLength && !automation?.checking && automation?.session !== 'qr_required') return undefined;
-    const timer = setTimeout(() => load(query), 3000);
+    if (!waView && !automation?.queueLength && !automation?.checking) return undefined;
+    const timer = setTimeout(() => load(query), 4000);
     return () => clearTimeout(timer);
-  }, [automation?.queueLength, automation?.activeJobId, automation?.checking, automation?.session, automation?.lastCheckedAt, query]);
+  }, [automation?.queueLength, automation?.activeJobId, automation?.checking, automation?.lastCheckedAt, query, waView]);
 
   useEffect(() => {
-    if (!automation?.screenshotAvailable) return undefined;
+    if (!waView) return undefined;
+    const timer = setInterval(() => {
+      api('/api/admin/automation/refresh', { method: 'POST' })
+        .then(() => load(query))
+        .catch((err) => {
+          if (!handleAuthError(err)) load(query);
+        });
+    }, 8000);
+    return () => clearInterval(timer);
+  }, [waView, query]);
+
+  useEffect(() => {
+    if (waView !== 'whatsapp' || !automation?.screenshotAvailable) return undefined;
     let cancelled = false;
     const token = sessionStorage.getItem('wg_admin_token');
-    fetch(`/api/admin/automation/screenshot?ts=${Date.now()}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-      cache: 'no-store',
-    })
-      .then((response) => (response.ok ? response.blob() : null))
-      .then((blob) => new Promise((resolve) => {
-        if (!blob || cancelled) {
-          resolve('');
-          return;
-        }
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result || ''));
-        reader.onerror = () => resolve('');
-        reader.readAsDataURL(blob);
-      }))
-      .then((nextUrl) => {
-        if (!cancelled && nextUrl) setShotUrl(nextUrl);
-      })
-      .catch(() => undefined);
+    readImage('/api/admin/automation/screenshot', token).then((nextUrl) => {
+      if (!cancelled && nextUrl) setShotUrl(nextUrl);
+    }).catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [automation?.screenshotAvailable, automation?.lastCheckedAt]);
+  }, [waView, automation?.screenshotAvailable, automation?.lastCheckedAt]);
+
+  useEffect(() => {
+    if (waView !== 'scanner' || !automation?.qrAvailable) return undefined;
+    let cancelled = false;
+    const token = sessionStorage.getItem('wg_admin_token');
+    readImage('/api/admin/automation/qr', token).then((nextUrl) => {
+      if (!cancelled && nextUrl) setQrUrl(nextUrl);
+    }).catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [waView, automation?.qrAvailable, automation?.lastCheckedAt]);
 
   async function act(path, body) {
     setError('');
@@ -133,6 +170,46 @@ export function AdminDashboardPage() {
       await load();
     } catch (err) {
       handleAuthError(err);
+    }
+  }
+
+  async function openView(next) {
+    setError('');
+    setNotice('');
+    setLogoutArmed(false);
+    setWaView(next);
+    setWaBusy(true);
+    try {
+      await api('/api/admin/automation/session', { method: 'POST' });
+      await load();
+    } catch (err) {
+      handleAuthError(err);
+    } finally {
+      setWaBusy(false);
+    }
+  }
+
+  async function logoutWhatsApp() {
+    if (!logoutArmed) {
+      setLogoutArmed(true);
+      return;
+    }
+    setError('');
+    setNotice('');
+    setWaBusy(true);
+    try {
+      const result = await api('/api/admin/automation/logout', { method: 'POST' });
+      setNotice(result.message);
+      setLogoutArmed(false);
+      setQrUrl('');
+      setShotUrl('');
+      setWaView('scanner');
+      await load();
+    } catch (err) {
+      setLogoutArmed(false);
+      handleAuthError(err);
+    } finally {
+      setWaBusy(false);
     }
   }
 
@@ -156,14 +233,19 @@ export function AdminDashboardPage() {
     navigate('/admin/login');
   }
 
+  const session = automation?.session || 'unknown';
+
   return (
-    <Layout>
-      <div className="row spread">
-        <h1>Dashboard</h1>
+    <Layout wide>
+      <div className="page-head">
+        <div>
+          <p className="eyebrow">Administrator</p>
+          <h1>Dashboard</h1>
+        </div>
         <button type="button" className="secondary" onClick={logout}>Sign out</button>
       </div>
-      {error && <p className="form-error">{error}</p>}
-      {notice && <p className="success">{notice}</p>}
+      {error && <p className="form-error banner">{error}</p>}
+      {notice && <p className="success banner">{notice}</p>}
       {data && (
         <section className="stats">
           {STATS.map(([key, label]) => (
@@ -176,32 +258,75 @@ export function AdminDashboardPage() {
       )}
 
       <section className="card">
-        <h2>WhatsApp session</h2>
-        <p>{SESSION_HELP[automation?.session] || automation?.session}</p>
-        <p className="muted">
-          Queue {automation?.queueLength ?? 0}
-          {automation?.directAddEnabled ? ' · direct add enabled' : ' · invitation link mode'}
+        <div className="section-head">
+          <div>
+            <h2>WhatsApp</h2>
+            <p className="muted">Link the account that manages the group, or look at that account’s WhatsApp.</p>
+          </div>
+          <span className={`pill pill-${session}`}>{SESSION_LABELS[session] || session}</span>
+        </div>
+        <p className="muted queue-line">
+          {automation?.queueLength ? `${automation.queueLength} waiting` : 'Queue is clear'}
+          {automation?.directAddEnabled ? ' · adding from this account' : ' · invitation link only'}
           {automation?.queuePaused ? ' · paused because WhatsApp asked to slow down' : ''}
-          {automation?.lastError ? ` · ${automation.lastError}` : ''}
         </p>
-        {automation?.queuePaused && (
-          <button type="button" onClick={() => act('/api/admin/automation/resume')}>
-            Resume adding
+        <div className="row">
+          {automation?.queuePaused && (
+            <button type="button" onClick={() => act('/api/admin/automation/resume')}>
+              Resume adding
+            </button>
+          )}
+          <button type="button" onClick={() => openView('scanner')} disabled={waBusy}>
+            Show scanner
           </button>
+          <button type="button" className="secondary" onClick={() => openView('whatsapp')} disabled={waBusy}>
+            Show my WhatsApp
+          </button>
+          <button type="button" className="danger" onClick={logoutWhatsApp} disabled={waBusy}>
+            {logoutArmed ? 'Confirm log out' : 'Log out of WhatsApp'}
+          </button>
+          {waView && (
+            <button type="button" className="ghost" onClick={() => { setWaView(null); setLogoutArmed(false); }}>
+              Hide
+            </button>
+          )}
+        </div>
+        {logoutArmed && (
+          <p className="form-error">This signs the current WhatsApp account out of the server. Click confirm to scan a different account.</p>
         )}
-        <button type="button" onClick={() => act('/api/admin/automation/session')}>
-          Open WhatsApp Web
-        </button>
-        {shotUrl && <img className="session-shot" src={shotUrl} alt="WhatsApp Web on the server" />}
+
+        {waView === 'scanner' && (
+          <div className="viewer scanner-view">
+            <h3>Scan to link WhatsApp</h3>
+            <p className="muted">On your phone open WhatsApp, go to Linked devices, then link a device and scan this code.</p>
+            {session === 'authenticated' ? (
+              <p className="success">This server is already linked. Log out of WhatsApp to scan a different account.</p>
+            ) : qrUrl ? (
+              <img className="qr-shot" src={qrUrl} alt="WhatsApp login scanner" />
+            ) : (
+              <p className="muted">{waBusy || automation?.checking ? 'Preparing the scanner…' : 'The scanner will appear here.'}</p>
+            )}
+          </div>
+        )}
+
+        {waView === 'whatsapp' && (
+          <div className="viewer">
+            <h3>WhatsApp on this server</h3>
+            {shotUrl ? (
+              <img className="session-shot" src={shotUrl} alt="WhatsApp on the server" />
+            ) : (
+              <p className="muted">{waBusy || automation?.checking ? 'Opening WhatsApp…' : 'The WhatsApp view will appear here.'}</p>
+            )}
+          </div>
+        )}
       </section>
 
       {settings && (
         <form className="card form" onSubmit={saveSettings}>
-          <h2>Invitation link</h2>
-          <p>
-            Paste the current group invitation link. To replace a link that has spread too far, revoke it in
-            the WhatsApp group first, create a new link, and save that new link here. The old link stops working
-            as soon as WhatsApp revokes it.
+          <h2>Group</h2>
+          <p className="muted">
+            Paste the current group invitation link. If a link has spread too far, revoke it in the WhatsApp group,
+            create a new one, and save it here.
           </p>
           <label>
             Invitation link
@@ -211,7 +336,7 @@ export function AdminDashboardPage() {
             />
           </label>
           <label>
-            Group name for the optional add attempt
+            Group name
             <input
               value={settings.groupName || ''}
               onChange={(event) => setSettings({ ...settings, groupName: event.target.value })}
@@ -224,15 +349,17 @@ export function AdminDashboardPage() {
               onChange={(event) => setSettings({ ...settings, admissionMode: event.target.value })}
             >
               <option value="invite">Show the link when eligible</option>
-              <option value="approval">Require administrator approval after the link is opened</option>
+              <option value="approval">Require approval after the link is opened</option>
             </select>
           </label>
-          <button type="submit">Save settings</button>
+          <button type="submit">Save group settings</button>
         </form>
       )}
 
       <section className="card">
-        <h2>Registrations</h2>
+        <div className="section-head">
+          <h2>Registrations</h2>
+        </div>
         <form
           className="search"
           onSubmit={(event) => {
@@ -242,6 +369,7 @@ export function AdminDashboardPage() {
         >
           <input
             value={query}
+            aria-label="Search name, phone, or registration id"
             placeholder="Search name, phone, or registration id"
             onChange={(event) => setQuery(event.target.value)}
           />
@@ -261,29 +389,39 @@ export function AdminDashboardPage() {
             </thead>
             <tbody>
               {data?.registrations.map((row) => (
-                <tr key={row.id} onClick={() => { setSelected(row); setConfirmed(false); }}>
+                <tr
+                  key={row.id}
+                  className={selected?.id === row.id ? 'selected' : undefined}
+                  onClick={() => { setSelected(row); setConfirmed(false); }}
+                >
                   <td>{row.name}</td>
                   <td>{row.phoneMasked}</td>
                   <td>{row.contactSavedName || '—'}</td>
                   <td>{contactStatusLabel(row.contactSaved)}</td>
-                  <td>{STATUS_LABELS[row.status] || row.status}</td>
-                  <td>{row.paymentStatus}</td>
+                  <td><span className={`pill pill-${row.status}`}>{STATUS_LABELS[row.status] || row.status}</span></td>
+                  <td>{PAYMENT_LABELS[row.paymentStatus] || row.paymentStatus}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-          {data && data.registrations.length === 0 && <p>No registrations match this search.</p>}
+          {data && data.registrations.length === 0 && <p className="muted">No registrations match this search.</p>}
         </div>
       </section>
 
       {selected && (
-        <section className="card">
-          <h2>{selected.name}</h2>
-          <p>{selected.phoneE164}</p>
-          <p>Status: {STATUS_LABELS[selected.status] || selected.status}</p>
-          <p>Saved as: {selected.contactSavedName || '—'}</p>
-          <p>Contact: {contactStatusLabel(selected.contactSaved)}</p>
-          <p>Action: {selected.action || 'none'}</p>
+        <section className="card detail">
+          <div className="section-head">
+            <div>
+              <h2>{selected.name}</h2>
+              <p className="muted">{selected.phoneE164}</p>
+            </div>
+            <span className={`pill pill-${selected.status}`}>{STATUS_LABELS[selected.status] || selected.status}</span>
+          </div>
+          <dl className="facts">
+            <div><dt>Saved as</dt><dd>{selected.contactSavedName || '—'}</dd></div>
+            <div><dt>Contact</dt><dd>{contactStatusLabel(selected.contactSaved)}</dd></div>
+            <div><dt>Action</dt><dd>{selected.action || 'None yet'}</dd></div>
+          </dl>
           {selected.failureMessage && <p className="form-error">{selected.failureMessage}</p>}
           <div className="row">
             <button type="button" className="secondary" onClick={() => act(`/api/admin/registrations/${selected.id}/review`)}>
@@ -313,15 +451,16 @@ export function AdminDashboardPage() {
       )}
 
       <section className="card">
-        <h2>Automation log</h2>
+        <h2>Activity</h2>
         <ul className="logs">
           {logs.map((entry) => (
             <li key={entry.id}>
               <span>{new Date(entry.at).toLocaleString()}</span>
-              <strong>{entry.event}</strong>
+              <strong>{entry.event.replaceAll('_', ' ')}</strong>
               <span>{entry.registrationId || ''}</span>
             </li>
           ))}
+          {logs.length === 0 && <li className="muted">No activity yet.</li>}
         </ul>
       </section>
     </Layout>

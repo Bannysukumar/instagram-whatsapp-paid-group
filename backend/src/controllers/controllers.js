@@ -136,12 +136,40 @@ export function createAdminController({ registrations, store, config, automation
       }
       automation.triggerSessionCheck();
       res.status(202).json({
-        message: 'WhatsApp Web is opening in the persistent browser. Scan the QR code if you are asked to.',
+        message: 'WhatsApp is opening. Use Show scanner if you need to link an account.',
       });
+    },
+    async logoutWhatsApp(_req, res) {
+      if (!config.automationEnabled || !automation?.logout) {
+        throw new HttpError(503, 'automation_disabled', 'Browser automation is disabled.');
+      }
+      if (queue.activeId) {
+        throw new HttpError(409, 'busy', 'A group add is running. Wait until it finishes, then log out.');
+      }
+      await automation.logout();
+      automation.triggerSessionCheck();
+      await store.addLog({ level: 'info', event: 'whatsapp_logged_out' });
+      res.json({ message: 'WhatsApp was logged out. Scan the new code with the account you want to use.' });
+    },
+    async refreshSession(_req, res) {
+      if (!config.automationEnabled || !automation?.refreshShot) {
+        throw new HttpError(503, 'automation_disabled', 'Browser automation is disabled.');
+      }
+      if (queue.activeId || automation.getStatus().checking) {
+        res.json({ skipped: true });
+        return;
+      }
+      await automation.refreshShot();
+      res.json({ session: automation.getStatus().session });
     },
     async screenshot(_req, res) {
       const file = automation?.screenshotFile?.();
       if (!file) throw new HttpError(404, 'not_found', 'No browser screenshot is available yet.');
+      res.sendFile(file);
+    },
+    async qr(_req, res) {
+      const file = automation?.qrFile?.();
+      if (!file) throw new HttpError(404, 'not_found', 'No scanner code is available yet.');
       res.sendFile(file);
     },
     async logs(_req, res) {

@@ -53,6 +53,10 @@ export async function dismissWhatsAppPopups(page) {
   }
 }
 
+export async function readPageLoginState(page) {
+  return classifyLoginSignals(await readSignals(page));
+}
+
 export async function detectPageLoginState(page) {
   await page.goto('https://web.whatsapp.com/', { waitUntil: 'domcontentloaded', timeout: 45000 });
   const deadline = Date.now() + 20000;

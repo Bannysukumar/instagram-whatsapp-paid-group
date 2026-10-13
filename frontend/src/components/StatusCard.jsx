@@ -12,7 +12,7 @@ export function StatusCard({ registration, paymentsEnabled, amountLabel, onPay, 
   if (!registration) return null;
   return (
     <section className="card status-card">
-      <p className="eyebrow">{LABELS[registration.status] || registration.status}</p>
+      <p className={`pill pill-${registration.status}`}>{LABELS[registration.status] || registration.status}</p>
       <h2>{registration.name}</h2>
       <p className="muted">{registration.phoneMasked}</p>
       <p>{registration.message}</p>

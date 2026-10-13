@@ -47,6 +47,17 @@ export async function closeContext() {
   await context.close();
 }
 
+export async function resetPersistentProfile(dataDir) {
+  return withBrowserLock(async () => {
+    await closeContext();
+    const profileDir = path.join(dataDir, 'wa-profile');
+    await fs.rm(profileDir, { recursive: true, force: true }).catch(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      await fs.rm(profileDir, { recursive: true, force: true });
+    });
+  });
+}
+
 export async function withWhatsAppPage(dataDir, fn) {
   return withBrowserLock(async () => {
     const context = await launchContext(dataDir);

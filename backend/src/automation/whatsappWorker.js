@@ -1,8 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { withWhatsAppPage } from './browser.js';
+import { resetPersistentProfile, withWhatsAppPage } from './browser.js';
 import { browserFailureCode } from './loginState.js';
-import { detectPageLoginState, tryAddParticipant } from './whatsapp.js';
+import { detectPageLoginState, readPageLoginState, tryAddParticipant } from './whatsapp.js';
 
 async function saveShot(dataDir, page, filename) {
   const directory = path.join(dataDir, 'screenshots');
@@ -19,19 +19,35 @@ export function createAutomation({ dataDir }) {
     lastError: null,
     lastCheckedAt: null,
     screenshotFile: null,
+    qrFile: null,
   };
   let checkPromise = null;
+
+  async function saveQr(page) {
+    const directory = path.join(dataDir, 'screenshots');
+    await fs.mkdir(directory, { recursive: true });
+    const file = path.join(directory, 'qr.png');
+    const target = page.locator('[data-testid="qrcode"], div[data-ref] canvas, div[data-ref]').first();
+    if (!(await target.isVisible().catch(() => false))) return null;
+    await target.screenshot({ path: file });
+    return file;
+  }
+
+  async function storeView(page, login) {
+    state.session = login;
+    state.screenshotFile = await saveShot(dataDir, page, 'session.png');
+    state.qrFile = login === 'qr_required' ? await saveQr(page).catch(() => null) : null;
+    state.lastCheckedAt = new Date().toISOString();
+    state.lastError = null;
+  }
 
   async function runSessionCheck() {
     try {
       const session = await withWhatsAppPage(dataDir, async (page) => {
         const login = await detectPageLoginState(page);
-        state.screenshotFile = await saveShot(dataDir, page, 'session.png');
+        await storeView(page, login);
         return login;
       });
-      state.session = session;
-      state.lastError = null;
-      state.lastCheckedAt = new Date().toISOString();
       return { state: session };
     } catch (error) {
       state.session = 'error';
@@ -49,10 +65,44 @@ export function createAutomation({ dataDir }) {
         lastError: state.lastError,
         lastCheckedAt: state.lastCheckedAt,
         screenshotAvailable: Boolean(state.screenshotFile),
+        qrAvailable: Boolean(state.qrFile),
       };
     },
     screenshotFile() {
       return state.screenshotFile;
+    },
+    qrFile() {
+      return state.qrFile;
+    },
+    async logout() {
+      await resetPersistentProfile(dataDir);
+      state.session = 'unknown';
+      state.qrFile = null;
+      state.screenshotFile = null;
+      state.lastError = null;
+      state.lastCheckedAt = new Date().toISOString();
+    },
+    async refreshShot() {
+      if (state.checking) return { skipped: true };
+      state.checking = true;
+      try {
+        await withWhatsAppPage(dataDir, async (page) => {
+          let login = 'unknown';
+          if (String(page.url()).includes('web.whatsapp.com')) {
+            login = await readPageLoginState(page);
+          }
+          if (login === 'unknown') login = await detectPageLoginState(page);
+          await storeView(page, login);
+        });
+        return { state: state.session };
+      } catch (error) {
+        state.session = 'error';
+        state.lastError = browserFailureCode(error);
+        state.lastCheckedAt = new Date().toISOString();
+        throw error;
+      } finally {
+        state.checking = false;
+      }
     },
     triggerSessionCheck() {
       if (checkPromise) return;

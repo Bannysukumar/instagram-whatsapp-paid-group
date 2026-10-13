@@ -96,7 +96,7 @@ export function StatusPage() {
 
   return (
     <Layout>
-      <h1>Registration status</h1>
+      <h1>Your registration</h1>
       {error && <p className="form-error">{error}</p>}
       <StatusCard
         registration={registration}

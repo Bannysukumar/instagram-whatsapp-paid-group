@@ -42,7 +42,10 @@ export function adminRoutes({ controller, config, guard }) {
   router.get('/automation/status', guard, asyncHandler(controller.automationStatus));
   router.post('/automation/resume', guard, asyncHandler(controller.resumeQueue));
   router.post('/automation/session', guard, asyncHandler(controller.openSession));
+  router.post('/automation/logout', guard, asyncHandler(controller.logoutWhatsApp));
+  router.post('/automation/refresh', guard, asyncHandler(controller.refreshSession));
   router.get('/automation/screenshot', guard, asyncHandler(controller.screenshot));
+  router.get('/automation/qr', guard, asyncHandler(controller.qr));
   router.get('/logs', guard, asyncHandler(controller.logs));
   return router;
 }

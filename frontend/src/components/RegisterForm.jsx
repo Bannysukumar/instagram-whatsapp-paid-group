@@ -64,6 +64,7 @@ export function RegisterForm({ onSubmit }) {
           onChange={update}
         />
         {fields.phone && <span className="field-error">{fields.phone}</span>}
+        {!fields.phone && <span className="hint">Include the country code, for example +91 98765 43210.</span>}
       </label>
       <label>
         Email <span className="optional">optional</span>
@@ -81,7 +82,7 @@ export function RegisterForm({ onSubmit }) {
           <Link to={`/status/${duplicateId}`}>Open the existing registration</Link>
         </p>
       )}
-      <button type="submit" disabled={busy}>{busy ? 'Submitting…' : 'Submit registration'}</button>
+      <button type="submit" disabled={busy}>{busy ? 'Submitting…' : 'Request access'}</button>
     </form>
   );
 }

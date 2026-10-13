@@ -30,24 +30,28 @@ export function AdminLoginPage() {
 
   return (
     <Layout>
-      <h1>Administrator sign-in</h1>
-      <form className="card form" onSubmit={handleSubmit}>
-        <label>
-          Username
-          <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" />
-        </label>
-        <label>
-          Password
-          <input
-            type="password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            autoComplete="current-password"
-          />
-        </label>
-        {error && <p className="form-error">{error}</p>}
-        <button type="submit" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
-      </form>
+      <section className="auth-wrap">
+        <p className="eyebrow">Administrator</p>
+        <h1>Sign in</h1>
+        <p className="lede">Use the admin account to manage registrations and the linked WhatsApp.</p>
+        <form className="card form" onSubmit={handleSubmit}>
+          <label>
+            Username
+            <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" />
+          </label>
+          <label>
+            Password
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              autoComplete="current-password"
+            />
+          </label>
+          {error && <p className="form-error">{error}</p>}
+          <button type="submit" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
+        </form>
+      </section>
     </Layout>
   );
 }
