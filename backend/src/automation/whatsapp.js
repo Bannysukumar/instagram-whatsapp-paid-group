@@ -18,13 +18,14 @@ async function readSignals(page) {
 }
 
 export async function dismissWhatsAppPopups(page) {
-  const dialog = page.locator('[role="dialog"]').filter({ hasText: /what'?s new on whatsapp/i }).last();
-  if (!(await dialog.isVisible().catch(() => false))) return;
-  const close = dialog.getByRole('button', { name: /close|continue|ok|got it|not now/i }).first();
-  const icon = dialog.locator('[data-icon="x"], [data-icon="close"], [aria-label="Close"]').first();
-  if (await close.isVisible().catch(() => false)) await close.click();
-  else if (await icon.isVisible().catch(() => false)) await icon.click();
-  else await dialog.locator('button').first().click().catch(() => {});
+  const title = page.getByText(/what'?s new on whatsapp web/i).first();
+  if (!(await title.isVisible().catch(() => false))) return;
+  const continueButton = page.getByRole('button', { name: /^continue$/i }).last();
+  if (await continueButton.isVisible().catch(() => false)) {
+    await continueButton.click();
+  } else {
+    await page.keyboard.press('Escape').catch(() => {});
+  }
   await page.waitForTimeout(1000);
 }
 
