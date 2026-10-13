@@ -31,7 +31,7 @@ function contactStatusLabel(saved) {
 
 const SESSION_HELP = {
   authenticated: 'WhatsApp Web is logged in on the saved browser profile.',
-  qr_required: 'Scan the QR code in the Chromium window, then check the session again.',
+  qr_required: 'Scan the QR code below with the WhatsApp account that manages the group.',
   unknown: 'The session has not been checked yet.',
   disabled: 'Browser automation is turned off.',
   error: 'The browser did not start. Install Chromium with npm run playwright:install in the backend folder.',
@@ -48,6 +48,7 @@ export function AdminDashboardPage() {
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [confirmed, setConfirmed] = useState(false);
+  const [shotUrl, setShotUrl] = useState('');
 
   function handleAuthError(err) {
     if (err.status === 401) {
@@ -86,10 +87,33 @@ export function AdminDashboardPage() {
   }, [navigate]);
 
   useEffect(() => {
-    if (!automation?.queueLength) return undefined;
-    const timer = setTimeout(() => load(query), 4000);
+    if (!automation?.queueLength && !automation?.checking && automation?.session !== 'qr_required') return undefined;
+    const timer = setTimeout(() => load(query), 3000);
     return () => clearTimeout(timer);
-  }, [automation?.queueLength, automation?.activeJobId, query]);
+  }, [automation?.queueLength, automation?.activeJobId, automation?.checking, automation?.session, automation?.lastCheckedAt, query]);
+
+  useEffect(() => {
+    if (!automation?.screenshotAvailable) return undefined;
+    let cancelled = false;
+    const token = sessionStorage.getItem('wg_admin_token');
+    fetch(`/api/admin/automation/screenshot?ts=${Date.now()}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      cache: 'no-store',
+    })
+      .then((response) => (response.ok ? response.blob() : null))
+      .then((blob) => {
+        if (!blob || cancelled) return;
+        const nextUrl = URL.createObjectURL(blob);
+        setShotUrl((current) => {
+          if (current) URL.revokeObjectURL(current);
+          return nextUrl;
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [automation?.screenshotAvailable, automation?.lastCheckedAt]);
 
   async function act(path, body) {
     setError('');
@@ -163,6 +187,7 @@ export function AdminDashboardPage() {
         <button type="button" onClick={() => act('/api/admin/automation/session')}>
           Open WhatsApp Web
         </button>
+        {shotUrl && <img className="session-shot" src={shotUrl} alt="WhatsApp Web on the server" />}
       </section>
 
       {settings && (

@@ -51,6 +51,15 @@ h2 { font-size: 1.15rem; margin: 0 0 8px; }
   margin: 16px 0;
 }
 
+.session-shot {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  margin-top: 16px;
+  border-radius: 12px;
+  background: #fff;
+}
+
 .form {
   display: grid;
   gap: 14px;
