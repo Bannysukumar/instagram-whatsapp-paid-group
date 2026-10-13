@@ -83,10 +83,11 @@ export function createAutomation({ dataDir }) {
           const result = await tryAddParticipant(page, args);
           state.screenshotFile = await saveShot(dataDir, page, 'last-add.png').catch(() => state.screenshotFile);
           return result;
-        } catch {
+        } catch (error) {
           state.screenshotFile = await saveShot(dataDir, page, `error-${Date.now()}.png`).catch(() => state.screenshotFile);
-          state.lastError = 'interface_changed';
-          return { outcome: 'ui_unavailable', reason: 'interface_changed' };
+          const detail = String(error?.message || 'interface_changed').split('\n')[0].slice(0, 160);
+          state.lastError = detail;
+          return { outcome: 'ui_unavailable', reason: `interface_changed: ${detail}` };
         }
       });
     },

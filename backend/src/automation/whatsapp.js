@@ -83,12 +83,22 @@ export function inviteCodeFromLink(inviteLink) {
 }
 
 async function openGroup(page, { groupName, inviteLink }) {
+  if (groupName) {
+    const row = page.locator('#pane-side').getByText(groupName, { exact: true }).first();
+    if (await row.isVisible().catch(() => false)) {
+      await row.click({ timeout: 8000 }).catch(() => {});
+      await page.waitForTimeout(1500);
+      const header = page.locator('#main header').getByText(groupName, { exact: false }).first();
+      if (await header.isVisible().catch(() => false)) return { opened: true };
+    }
+  }
+
   const code = inviteCodeFromLink(inviteLink);
   if (code) {
     await page.goto(`https://web.whatsapp.com/accept?code=${encodeURIComponent(code)}`, {
       waitUntil: 'domcontentloaded',
       timeout: 45000,
-    });
+    }).catch(() => {});
     const deadline = Date.now() + 15000;
     let joinClicked = false;
     while (Date.now() < deadline) {
@@ -130,17 +140,19 @@ async function saveContact(page, { name, phone }) {
   const direct = page.getByRole('button', { name: /^add contact$/i }).first();
   let opened = false;
   if (await direct.isVisible().catch(() => false)) {
-    await direct.click();
-    opened = true;
-  } else {
+    opened = await direct.click({ timeout: 8000 }).then(() => true).catch(() => false);
+  }
+  if (!opened) {
     const newChat = page.getByRole('button', { name: /new chat/i }).first();
     if (await newChat.isVisible().catch(() => false)) {
-      await newChat.click();
-      await pause(page, 1500);
-      const item = page.getByText(/^new contact$/i).first();
-      if (await item.isVisible().catch(() => false)) {
-        await item.click();
-        opened = true;
+      const clicked = await newChat.click({ timeout: 8000 }).then(() => true).catch(() => false);
+      if (clicked) {
+        await pause(page, 1500);
+        const item = page.getByText(/^new contact$/i).first();
+        if (await item.isVisible().catch(() => false)) {
+          await item.click({ timeout: 8000 }).catch(() => {});
+          opened = true;
+        }
       }
     }
   }
