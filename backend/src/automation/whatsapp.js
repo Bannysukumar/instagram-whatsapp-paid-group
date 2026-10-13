@@ -17,11 +17,7 @@ async function readSignals(page) {
   });
 }
 
-async function introPopupOpen(page) {
-  return page.evaluate(() => /what.?s new on whatsapp web/i.test(document.body?.innerText || '')).catch(() => false);
-}
-
-async function continueButtonPoint(page) {
+async function centeredContinuePoint(page) {
   return page.evaluate(() => {
     const hits = [];
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
@@ -30,12 +26,12 @@ async function continueButtonPoint(page) {
       if (/^continue$/i.test((node.textContent || '').trim()) && node.parentElement) {
         const rect = node.parentElement.getBoundingClientRect();
         const style = getComputedStyle(node.parentElement);
-        if (rect.width >= 8 && rect.height >= 8 && style.visibility !== 'hidden' && style.display !== 'none') {
-          hits.push({
-            x: rect.x + rect.width / 2,
-            y: rect.y + rect.height / 2,
-            area: rect.width * rect.height,
-          });
+        const x = rect.x + rect.width / 2;
+        const y = rect.y + rect.height / 2;
+        const centered = x > window.innerWidth * 0.2 && x < window.innerWidth * 0.8
+          && y > window.innerHeight * 0.2 && y < window.innerHeight * 0.9;
+        if (centered && rect.width >= 8 && rect.height >= 8 && style.visibility !== 'hidden' && style.display !== 'none') {
+          hits.push({ x, y, area: rect.width * rect.height });
         }
       }
       node = walker.nextNode();
@@ -46,19 +42,10 @@ async function continueButtonPoint(page) {
 }
 
 export async function dismissWhatsAppPopups(page) {
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    if (!(await introPopupOpen(page))) return;
-    const point = await continueButtonPoint(page);
-    if (point) {
-      await page.mouse.click(point.x, point.y).catch(() => {});
-    } else {
-      const continueText = page.getByText(/^continue$/i).last();
-      if (await continueText.isVisible().catch(() => false)) {
-        await continueText.click({ force: true }).catch(() => {});
-      } else {
-        await page.keyboard.press('Escape').catch(() => {});
-      }
-    }
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const point = await centeredContinuePoint(page);
+    if (!point) return;
+    await page.mouse.click(point.x, point.y).catch(() => {});
     await page.waitForTimeout(1000);
   }
 }
