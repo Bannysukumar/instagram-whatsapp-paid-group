@@ -18,15 +18,20 @@ async function readSignals(page) {
 }
 
 export async function dismissWhatsAppPopups(page) {
-  const title = page.getByText(/what'?s new on whatsapp web/i).first();
-  if (!(await title.isVisible().catch(() => false))) return;
-  const continueButton = page.getByRole('button', { name: /^continue$/i }).last();
-  if (await continueButton.isVisible().catch(() => false)) {
-    await continueButton.click();
-  } else {
-    await page.keyboard.press('Escape').catch(() => {});
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const title = page.getByText(/what'?s new on whatsapp web/i).first();
+    if (!(await title.isVisible().catch(() => false))) return;
+    const continueText = page.getByText(/^continue$/i).last();
+    const continueButton = page.getByRole('button', { name: /continue/i }).last();
+    if (await continueText.isVisible().catch(() => false)) {
+      await continueText.click({ force: true }).catch(() => {});
+    } else if (await continueButton.isVisible().catch(() => false)) {
+      await continueButton.click({ force: true }).catch(() => {});
+    } else {
+      await page.keyboard.press('Escape').catch(() => {});
+    }
+    await page.waitForTimeout(1000);
   }
-  await page.waitForTimeout(1000);
 }
 
 export async function detectPageLoginState(page) {
