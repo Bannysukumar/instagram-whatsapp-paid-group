@@ -89,14 +89,65 @@ export function inviteCodeFromLink(inviteLink) {
   }
 }
 
+async function groupHeaderVisible(page, groupName) {
+  if (!groupName) return false;
+  return page.locator('#main header').getByText(groupName, { exact: false }).first().isVisible().catch(() => false);
+}
+
+async function clickExactText(page, pattern, { skipChatList = false } = {}) {
+  const point = await page.evaluate(({ source, flags, skipSide }) => {
+    const expression = new RegExp(source, flags);
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const hits = [];
+    let node = walker.nextNode();
+    while (node) {
+      const value = (node.textContent || '').replace(/\s+/g, ' ').trim();
+      const parent = node.parentElement;
+      if (!expression.test(value) || !parent) {
+        node = walker.nextNode();
+        continue;
+      }
+      if (skipSide && parent.closest('#pane-side')) {
+        node = walker.nextNode();
+        continue;
+      }
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rect = range.getBoundingClientRect();
+      if (rect.width >= 4 && rect.height >= 4) {
+        hits.push({ area: rect.width * rect.height, parent });
+      }
+      node = walker.nextNode();
+    }
+    hits.sort((a, b) => a.area - b.area);
+    const chosen = hits[0]?.parent;
+    if (!chosen) return null;
+    chosen.scrollIntoView({ block: 'center' });
+    const range = document.createRange();
+    range.selectNodeContents(chosen);
+    const rect = range.getBoundingClientRect();
+    if (rect.width < 4 || rect.height < 4) return null;
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+  }, { source: pattern.source, flags: pattern.flags, skipSide: skipChatList }).catch(() => null);
+  if (!point) return false;
+  await page.mouse.click(point.x, point.y).catch(() => {});
+  return true;
+}
+
 async function openGroup(page, { groupName, inviteLink }) {
+  await page.keyboard.press('Escape').catch(() => {});
+  const chatSearch = page.getByRole('textbox', { name: /search or start a new chat/i }).first();
+  if (await chatSearch.isVisible().catch(() => false)) {
+    await chatSearch.fill('').catch(() => {});
+    await page.waitForTimeout(500);
+  }
+
   if (groupName) {
     const row = page.locator('#pane-side').getByText(groupName, { exact: true }).first();
     if (await row.isVisible().catch(() => false)) {
       await row.click({ timeout: 8000 }).catch(() => {});
       await page.waitForTimeout(1500);
-      const header = page.locator('#main header').getByText(groupName, { exact: false }).first();
-      if (await header.isVisible().catch(() => false)) return { opened: true };
+      if (await groupHeaderVisible(page, groupName)) return { opened: true };
     }
   }
 
@@ -109,7 +160,7 @@ async function openGroup(page, { groupName, inviteLink }) {
     const deadline = Date.now() + 15000;
     let joinClicked = false;
     while (Date.now() < deadline) {
-      if (await page.locator('#main').first().isVisible().catch(() => false)) return { opened: true };
+      if (await groupHeaderVisible(page, groupName)) return { opened: true };
       const join = page.getByRole('button', { name: /join group|join chat/i }).first();
       if (!joinClicked && await join.isVisible().catch(() => false)) {
         joinClicked = true;
@@ -117,7 +168,9 @@ async function openGroup(page, { groupName, inviteLink }) {
       }
       await page.waitForTimeout(500);
     }
-    return { opened: false, reason: 'group_not_opened' };
+    if (!groupName && await page.locator('#main').first().isVisible().catch(() => false)) {
+      return { opened: true };
+    }
   }
 
   if (!groupName) return { opened: false, reason: 'group_name_missing' };
@@ -130,7 +183,9 @@ async function openGroup(page, { groupName, inviteLink }) {
     await searchBox.fill('');
     await page.keyboard.type(groupName, { delay: 20 });
     await side.getByText(groupName, { exact: false }).first().click({ timeout: 8000 });
-    return { opened: true };
+    await page.waitForTimeout(1500);
+    if (await groupHeaderVisible(page, groupName)) return { opened: true };
+    return { opened: false, reason: 'group_not_opened' };
   } catch {
     return { opened: false, reason: 'group_not_found' };
   }
@@ -347,32 +402,48 @@ export async function tryAddParticipant(page, { groupName, phone, inviteLink, co
 
   await pause(page, 2000);
   await dismissWhatsAppPopups(page);
-  await page.locator('#main header').first().click({ timeout: 8000 }).catch(() => {});
+  const title = page.locator('#main header').getByText(groupName, { exact: false }).first();
+  if (await title.isVisible().catch(() => false)) {
+    await title.click({ timeout: 8000 }).catch(() => {});
+  } else {
+    await page.locator('#main header').first().click({ timeout: 8000 }).catch(() => {});
+  }
   await pause(page, 1500);
   await dismissWhatsAppPopups(page);
 
-  const addButton = page.getByRole('button', { name: /add participant|add member|add members/i }).first();
-  if (!(await addButton.isVisible().catch(() => false))) {
-    return { outcome: 'ui_unavailable', reason: 'add_control_missing', contact: { ...contact, ...verified } };
-  }
-  const addClicked = await addButton.click({ timeout: 8000 }).then(() => true).catch(() => false);
-  if (!addClicked) {
-    await dismissWhatsAppPopups(page);
-    const retried = await addButton.click({ timeout: 8000 }).then(() => true).catch(() => false);
-    if (!retried) {
-      return { outcome: 'ui_unavailable', reason: 'add_control_missing', contact: { ...contact, ...verified } };
+  let addOpened = false;
+  for (let attempt = 0; attempt < 3 && !addOpened; attempt += 1) {
+    addOpened = await clickExactText(page, /^add members?$/i, { skipChatList: true });
+    if (!addOpened) {
+      const addButton = page.getByRole('button', { name: /add participant|add member|add members/i }).first();
+      addOpened = await addButton.click({ timeout: 4000 }).then(() => true).catch(() => false);
     }
+    if (!addOpened) {
+      await page.locator('#main header').first().click({ timeout: 4000 }).catch(() => {});
+      await pause(page, 1000);
+    }
+  }
+  if (!addOpened) {
+    return { outcome: 'ui_unavailable', reason: 'add_control_missing', contact: { ...contact, ...verified } };
   }
   await pause(page, 2000);
 
   const dialog = page.locator('[role="dialog"]').last();
-  const input = dialog.locator('[contenteditable="true"], input').first();
+  const byPlaceholder = page.getByPlaceholder(/search name or number|name or number/i).last();
+  const byRole = page.getByRole('textbox', { name: /search name or number|search contacts/i }).last();
+  const inDialog = dialog.locator('[contenteditable="true"], input').first();
+  const input = await byPlaceholder.isVisible().catch(() => false)
+    ? byPlaceholder
+    : await byRole.isVisible().catch(() => false)
+      ? byRole
+      : inDialog;
   try {
     await input.click({ timeout: 8000 });
   } catch {
     return { outcome: 'ui_unavailable', reason: 'add_control_missing', contact: { ...contact, ...verified } };
   }
-  await page.keyboard.type(contactName || phone, { delay: 120 });
+  const savedName = String(contactName || '').slice(0, 25);
+  await page.keyboard.type(savedName || phone, { delay: 120 });
   await pause(page, 4000);
 
   if (await rateLimitVisible(page)) {
@@ -388,13 +459,22 @@ export async function tryAddParticipant(page, { groupName, phone, inviteLink, co
     return { outcome: 'not_selectable', reason: 'number_not_recognized', contact: { ...contact, ...verified } };
   }
 
-  const named = dialog.getByText(contactName, { exact: false }).first();
-  if (!(await named.isVisible().catch(() => false))) {
-    return { outcome: 'not_selectable', reason: 'number_not_recognized', contact: { ...contact, ...verified } };
+  const named = dialog.getByText(savedName, { exact: false }).first();
+  const picked = await named.isVisible().catch(() => false)
+    ? await named.click({ timeout: 8000 }).then(() => true).catch(() => false)
+    : await clickExactText(page, new RegExp(savedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), { skipChatList: true });
+  if (!picked) {
+    await input.fill('').catch(() => {});
+    const digits = String(phone || '').replace(/\D/g, '').slice(-10);
+    if (digits) await page.keyboard.type(digits, { delay: 120 });
+    await pause(page, 3000);
+    const byDigits = digits
+      ? await clickExactText(page, new RegExp(digits), { skipChatList: true })
+      : false;
+    if (!byDigits) {
+      return { outcome: 'not_selectable', reason: 'number_not_recognized', contact: { ...contact, ...verified } };
+    }
   }
-
-  await pause(page, 1000);
-  await named.click();
   await pause(page, 2000);
   const confirmIcon = dialog.locator('[data-icon="checkmark"], [data-icon="check"], [data-icon="wds-ic-check"]').last();
   const confirm = dialog.getByRole('button', { name: /add participant|add member|confirm|ok/i }).last();
@@ -408,14 +488,9 @@ export async function tryAddParticipant(page, { groupName, phone, inviteLink, co
   }
   await pause(page, 2000);
   const addMember = page.getByRole('button', { name: /^add member$/i }).last();
-  try {
-    await addMember.waitFor({ timeout: 8000 });
-    await pause(page, 1000);
-    await addMember.click();
-    await pause(page, 3000);
-  } catch {
-    // The confirm dialog did not appear, so membership stays unconfirmed.
-  }
+  const confirmed = await addMember.click({ timeout: 8000 }).then(() => true).catch(() => false)
+    || await clickExactText(page, /^add member$/i, { skipChatList: true });
+  if (confirmed) await pause(page, 3000);
   const added = page.getByText(/you added /i).first();
   if (await added.isVisible().catch(() => false)) {
     return { outcome: 'added_confirmed', reason: 'whatsapp_added_notice', contact: { ...contact, ...verified } };

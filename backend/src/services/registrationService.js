@@ -99,7 +99,7 @@ export function createRegistrationService({ store, queue, config }) {
       const registration = await store.getRegistration(id);
       if (!registration) throw new HttpError(404, 'not_found', 'Registration not found.');
       const retryStatuses = ['failed', 'invite_ready', 'pending_admission'];
-      const popupBlocked = String(registration.actionNote || '').includes('interface_changed');
+      const popupBlocked = /interface_changed|add_control_missing|group_not_opened/.test(String(registration.actionNote || ''));
       if ((!registration.retryable && !popupBlocked) || !retryStatuses.includes(registration.status)) {
         throw new HttpError(400, 'not_retryable', 'Only a task marked as safe to retry can be queued again.');
       }

@@ -117,10 +117,13 @@ export function contactSaveSummary(registration) {
 }
 
 export function adminView(registration) {
+  const noteAllowsRetry = ['failed', 'invite_ready', 'pending_admission'].includes(registration.status)
+    && /interface_changed|add_control_missing|group_not_opened/.test(String(registration.actionNote || ''));
   return {
     ...registration,
     ...contactSaveSummary(registration),
     phoneMasked: maskPhone(registration.phoneE164),
+    retryable: Boolean(registration.retryable) || noteAllowsRetry,
   };
 }
 
