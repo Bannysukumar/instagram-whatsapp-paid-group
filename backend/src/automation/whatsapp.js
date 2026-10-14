@@ -452,6 +452,11 @@ export async function tryAddParticipant(page, { groupName, phone, inviteLink, co
   await page.keyboard.type(savedName || phone, { delay: 120 });
   await pause(page, 4000);
 
+  const alreadyAdded = page.getByText(/already added to group/i).first();
+  if (await alreadyAdded.isVisible().catch(() => false)) {
+    return { outcome: 'added_confirmed', reason: 'already_in_group', contact: { ...contact, ...verified } };
+  }
+
   if (await rateLimitVisible(page)) {
     return { outcome: 'rate_limited', reason: 'whatsapp_limit', contact: { ...contact, ...verified } };
   }
@@ -477,6 +482,9 @@ export async function tryAddParticipant(page, { groupName, phone, inviteLink, co
     const byDigits = digits
       ? await clickExactText(page, new RegExp(digits), { skipChatList: true })
       : false;
+    if (await alreadyAdded.isVisible().catch(() => false)) {
+      return { outcome: 'added_confirmed', reason: 'already_in_group', contact: { ...contact, ...verified } };
+    }
     if (!byDigits) {
       return { outcome: 'not_selectable', reason: 'number_not_recognized', contact: { ...contact, ...verified } };
     }
