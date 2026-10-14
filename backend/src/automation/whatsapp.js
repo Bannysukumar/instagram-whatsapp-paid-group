@@ -402,24 +402,30 @@ export async function tryAddParticipant(page, { groupName, phone, inviteLink, co
 
   await pause(page, 2000);
   await dismissWhatsAppPopups(page);
-  const title = page.locator('#main header').getByText(groupName, { exact: false }).first();
-  if (await title.isVisible().catch(() => false)) {
-    await title.click({ timeout: 8000 }).catch(() => {});
-  } else {
-    await page.locator('#main header').first().click({ timeout: 8000 }).catch(() => {});
+  const infoOpen = await page.getByText(/^group info$/i).first().isVisible().catch(() => false);
+  if (!infoOpen) {
+    const title = page.locator('#main header').getByText(groupName, { exact: false }).first();
+    if (await title.isVisible().catch(() => false)) {
+      await title.click({ timeout: 8000 }).catch(() => {});
+    } else {
+      await page.locator('#main header').first().click({ timeout: 8000 }).catch(() => {});
+    }
+    await pause(page, 1500);
   }
-  await pause(page, 1500);
   await dismissWhatsAppPopups(page);
 
   let addOpened = false;
   for (let attempt = 0; attempt < 3 && !addOpened; attempt += 1) {
-    addOpened = await clickExactText(page, /^add members?$/i, { skipChatList: true });
+    const groupAdd = page.getByRole('button', { name: /^add$/i }).last();
+    addOpened = await groupAdd.click({ timeout: 4000 }).then(() => true).catch(() => false);
+    if (!addOpened) addOpened = await clickExactText(page, /^add$/i, { skipChatList: true });
+    if (!addOpened) addOpened = await clickExactText(page, /^add members?$/i, { skipChatList: true });
     if (!addOpened) {
       const addButton = page.getByRole('button', { name: /add participant|add member|add members/i }).first();
       addOpened = await addButton.click({ timeout: 4000 }).then(() => true).catch(() => false);
     }
     if (!addOpened) {
-      await page.locator('#main header').first().click({ timeout: 4000 }).catch(() => {});
+      await page.locator('#main header').getByText(groupName, { exact: false }).first().click({ timeout: 4000 }).catch(() => {});
       await pause(page, 1000);
     }
   }
