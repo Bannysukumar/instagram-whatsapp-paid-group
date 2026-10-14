@@ -132,6 +132,15 @@ export async function processMembership({ registration, settings, config, whatsa
     });
   }
 
+  if (addResult?.outcome === 'invite_sent') {
+    return withContact(finishWithInvite({
+      link,
+      admissionMode: settings.admissionMode,
+      action: 'direct_add_attempted',
+      actionNote: 'WhatsApp could not add this contact directly, so the group invitation was sent.',
+    }));
+  }
+
   if (addResult?.outcome === 'submitted_unconfirmed') {
     return withContact({
       status: 'awaiting_confirmation',

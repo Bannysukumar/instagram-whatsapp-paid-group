@@ -94,8 +94,8 @@ async function groupHeaderVisible(page, groupName) {
   return page.locator('#main header').getByText(groupName, { exact: false }).first().isVisible().catch(() => false);
 }
 
-async function clickExactText(page, pattern, { skipChatList = false } = {}) {
-  const point = await page.evaluate(({ source, flags, skipSide }) => {
+async function clickExactText(page, pattern, { skipChatList = false, skipEditable = false } = {}) {
+  const point = await page.evaluate(({ source, flags, skipSide, skipFields }) => {
     const expression = new RegExp(source, flags);
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     const hits = [];
@@ -108,6 +108,10 @@ async function clickExactText(page, pattern, { skipChatList = false } = {}) {
         continue;
       }
       if (skipSide && parent.closest('#pane-side')) {
+        node = walker.nextNode();
+        continue;
+      }
+      if (skipFields && parent.closest('[contenteditable="true"], input, textarea')) {
         node = walker.nextNode();
         continue;
       }
@@ -128,7 +132,7 @@ async function clickExactText(page, pattern, { skipChatList = false } = {}) {
     const rect = range.getBoundingClientRect();
     if (rect.width < 4 || rect.height < 4) return null;
     return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-  }, { source: pattern.source, flags: pattern.flags, skipSide: skipChatList }).catch(() => null);
+  }, { source: pattern.source, flags: pattern.flags, skipSide: skipChatList, skipFields: skipEditable }).catch(() => null);
   if (!point) return false;
   await page.mouse.click(point.x, point.y).catch(() => {});
   return true;
@@ -482,17 +486,21 @@ export async function tryAddParticipant(page, { groupName, phone, inviteLink, co
     return { outcome: 'not_selectable', reason: 'number_not_recognized', contact: { ...contact, ...verified } };
   }
 
-  const named = dialog.getByText(savedName, { exact: false }).first();
-  const picked = await named.isVisible().catch(() => false)
-    ? await named.click({ timeout: 8000 }).then(() => true).catch(() => false)
-    : await clickExactText(page, new RegExp(savedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), { skipChatList: true });
+  const namePattern = new RegExp(escapeRegExp(savedName), 'i');
+  let picked = await clickExactText(page, namePattern, { skipChatList: true, skipEditable: true });
+  if (!picked) {
+    const named = dialog.getByText(savedName, { exact: false }).first();
+    picked = await named.isVisible().catch(() => false)
+      ? await named.click({ timeout: 8000 }).then(() => true).catch(() => false)
+      : false;
+  }
   if (!picked) {
     await input.fill('').catch(() => {});
     const digits = String(phone || '').replace(/\D/g, '').slice(-10);
     if (digits) await page.keyboard.type(digits, { delay: 120 });
     await pause(page, 3000);
     const byDigits = digits
-      ? await clickExactText(page, new RegExp(digits), { skipChatList: true })
+      ? await clickExactText(page, new RegExp(digits), { skipChatList: true, skipEditable: true })
       : false;
     if (await alreadyAdded.isVisible().catch(() => false)) {
       return { outcome: 'added_confirmed', reason: 'already_in_group', contact: { ...contact, ...verified } };
@@ -501,25 +509,168 @@ export async function tryAddParticipant(page, { groupName, phone, inviteLink, co
       return { outcome: 'not_selectable', reason: 'number_not_recognized', contact: { ...contact, ...verified } };
     }
   }
-  await pause(page, 2000);
-  const confirmIcon = dialog.locator('[data-icon="checkmark"], [data-icon="check"], [data-icon="wds-ic-check"]').last();
-  const confirm = dialog.getByRole('button', { name: /add participant|add member|confirm|ok/i }).last();
-  if (await confirmIcon.isVisible().catch(() => false)) {
-    await confirmIcon.click();
-  } else if (await confirm.isVisible().catch(() => false)) {
-    await confirm.click();
-  } else {
-    const roundConfirm = dialog.locator('button').last();
-    if (await roundConfirm.isVisible().catch(() => false)) await roundConfirm.click();
+  if (await alreadyAdded.isVisible().catch(() => false)) {
+    return { outcome: 'added_confirmed', reason: 'already_in_group', contact: { ...contact, ...verified } };
   }
   await pause(page, 2000);
-  const addMember = page.getByRole('button', { name: /^add member$/i }).last();
-  const confirmed = await addMember.click({ timeout: 8000 }).then(() => true).catch(() => false)
-    || await clickExactText(page, /^add member$/i, { skipChatList: true });
-  if (confirmed) await pause(page, 3000);
-  const added = page.getByText(/you added /i).first();
-  if (await added.isVisible().catch(() => false)) {
-    return { outcome: 'added_confirmed', reason: 'whatsapp_added_notice', contact: { ...contact, ...verified } };
+  const confirmed = await clickAddConfirm(page);
+  if (!confirmed) {
+    return { outcome: 'ui_unavailable', reason: 'add_control_missing', contact: { ...contact, ...verified } };
+  }
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    if (await confirmAddDialog(page)) await pause(page, 1500);
+    const refused = page.getByText(/couldn.t add|could not add|invite them privately/i).first();
+    if (await refused.isVisible().catch(() => false)) {
+      await page.screenshot({ path: 'data/screenshots/invite-refused.png' }).catch(() => {});
+      await pause(page, 1500);
+      const invited = await clickPrivateInvite(page);
+      if (!invited) {
+        return { outcome: 'privacy_restricted', reason: 'privacy_restriction', contact: { ...contact, ...verified } };
+      }
+      await pause(page, 3000);
+      await page.screenshot({ path: 'data/screenshots/invite-compose.png' }).catch(() => {});
+      const composerOpen = await page.getByText(/send invite to/i).first().isVisible().catch(() => false);
+      if (!composerOpen) {
+        return { outcome: 'submitted_unconfirmed', reason: 'private_invite_not_opened', contact: { ...contact, ...verified } };
+      }
+      const clickedSend = await confirmInviteSend(page);
+      if (!clickedSend) {
+        return { outcome: 'submitted_unconfirmed', reason: 'private_invite_not_sent', contact: { ...contact, ...verified } };
+      }
+      await pause(page, 3000);
+      await page.screenshot({ path: 'data/screenshots/invite-after.png' }).catch(() => {});
+      const stillOpen = await page.getByText(/send invite to/i).first().isVisible().catch(() => false);
+      if (stillOpen) {
+        return { outcome: 'submitted_unconfirmed', reason: 'private_invite_not_sent', contact: { ...contact, ...verified } };
+      }
+      return { outcome: 'invite_sent', reason: 'private_invite_sent', contact: { ...contact, ...verified } };
+    }
+    if (await membershipNoticeVisible(page)) {
+      return { outcome: 'added_confirmed', reason: 'whatsapp_added_notice', contact: { ...contact, ...verified } };
+    }
+    await pause(page, 500);
   }
   return { outcome: 'submitted_unconfirmed', reason: 'no_membership_callback', contact: { ...contact, ...verified } };
+}
+
+async function membershipNoticeVisible(page) {
+  return page.evaluate(() => {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    while (node) {
+      const value = (node.textContent || '').replace(/\s+/g, ' ').trim();
+      const parent = node.parentElement;
+      if (/you added |already added to group/i.test(value) && parent && !parent.closest('#pane-side')) {
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const rect = range.getBoundingClientRect();
+        if (rect.width >= 4 && rect.height >= 4) return true;
+      }
+      node = walker.nextNode();
+    }
+    return false;
+  }).catch(() => false);
+}
+
+async function clickPrivateInvite(page) {
+  const refused = await page.getByText(/couldn.t add|could not add|invite them privately/i).first().isVisible().catch(() => false);
+  if (!refused) return false;
+  const button = page.getByRole('button', { name: /^invite to group$/i }).last();
+  if (await button.isVisible().catch(() => false)) {
+    return button.click({ timeout: 8000 }).then(() => true).catch(() => false);
+  }
+  return clickExactText(page, /^invite to group$/i, { skipChatList: true, skipEditable: true });
+}
+
+async function confirmInviteSend(page) {
+  const point = await page.evaluate(() => {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let preview = null;
+    let node = walker.nextNode();
+    while (node) {
+      const value = (node.textContent || '').replace(/\s+/g, ' ').trim();
+      if (/whatsapp group invite/i.test(value)) {
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const rect = range.getBoundingClientRect();
+        if (rect.width >= 4 && rect.height >= 4 && !node.parentElement?.closest('#pane-side')) {
+          preview = rect;
+          break;
+        }
+      }
+      node = walker.nextNode();
+    }
+    if (!preview) return null;
+    const hits = [];
+    for (const el of document.querySelectorAll('button, [role="button"], span[data-icon]')) {
+      if (el.closest('#pane-side')) continue;
+      const label = (el.getAttribute('aria-label') || el.innerText || '').replace(/\s+/g, ' ').trim();
+      if (/^close$|^cancel$/i.test(label)) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 28 || rect.height < 28 || rect.width > 80) continue;
+      const besidePreview = rect.left >= preview.right - 20
+        && Math.abs((rect.top + rect.bottom) / 2 - (preview.top + preview.bottom) / 2) < 70;
+      if (!besidePreview) continue;
+      const iconName = el.getAttribute('data-icon') || el.querySelector('[data-icon]')?.getAttribute('data-icon') || '';
+      hits.push({
+        x: rect.x + rect.width / 2,
+        y: rect.y + rect.height / 2,
+        send: /send/i.test(label) || /send/i.test(iconName) ? 1 : 0,
+      });
+    }
+    hits.sort((a, b) => b.send - a.send);
+    return hits[0] || null;
+  }).catch(() => null);
+  if (!point) return false;
+  await page.mouse.click(point.x, point.y).catch(() => {});
+  return true;
+}
+
+async function confirmAddDialog(page) {
+  const point = await page.evaluate(() => {
+    for (const dialog of document.querySelectorAll('[role="dialog"]')) {
+      const text = (dialog.innerText || '').replace(/\s+/g, ' ');
+      if (!/add .+ to .+ group/i.test(text)) continue;
+      for (const el of dialog.querySelectorAll('button, [role="button"]')) {
+        const label = (el.innerText || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+        if (!/^add member$/i.test(label)) continue;
+        const rect = el.getBoundingClientRect();
+        if (rect.width < 20 || rect.height < 16) continue;
+        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+      }
+    }
+    return null;
+  }).catch(() => null);
+  if (!point) return false;
+  await page.mouse.click(point.x, point.y).catch(() => {});
+  return true;
+}
+
+async function clickAddConfirm(page) {
+  const point = await page.evaluate(() => {
+    const hits = [];
+    for (const el of document.querySelectorAll('button, [role="button"]')) {
+      if (el.closest('#pane-side')) continue;
+      const label = (el.getAttribute('aria-label') || el.innerText || '').replace(/\s+/g, ' ').trim();
+      const iconName = el.querySelector('[data-icon]')?.getAttribute('data-icon') || '';
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 24 || rect.height < 24) continue;
+      const isCheck = /check/i.test(iconName);
+      const isAdd = /^add member$/i.test(label);
+      if (isCheck || (isAdd && rect.width <= 180)) {
+        hits.push({
+          x: rect.x + rect.width / 2,
+          y: rect.y + rect.height / 2,
+          bottom: rect.bottom,
+          check: isCheck ? 1 : 0,
+        });
+      }
+    }
+    hits.sort((a, b) => b.check - a.check || b.bottom - a.bottom);
+    return hits[0] || null;
+  }).catch(() => null);
+  if (!point) return false;
+  await page.mouse.click(point.x, point.y).catch(() => {});
+  return true;
 }
