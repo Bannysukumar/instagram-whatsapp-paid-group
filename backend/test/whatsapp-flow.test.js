@@ -100,6 +100,30 @@ describe('membership outcomes', () => {
     assert.equal(result.retryable, true);
   });
 
+  it('lets an administrator retry when the group chat did not open', async () => {
+    const result = await processMembership({
+      registration: baseRegistration,
+      settings,
+      config: { paymentsEnabled: false, directAddEnabled: true },
+      whatsapp: {
+        async checkSession() {
+          return { state: 'authenticated' };
+        },
+        async tryAddParticipant() {
+          return {
+            outcome: 'ui_unavailable',
+            reason: 'group_not_found',
+            contact: { saved: true, reason: 'contact_visible' },
+          };
+        },
+      },
+    });
+    assert.equal(result.status, 'invite_ready');
+    assert.equal(result.actionNote, 'contact_visible; group_not_found');
+    assert.equal(result.contactSaved, true);
+    assert.equal(result.retryable, true);
+  });
+
   it('leaves an add click as awaiting confirmation', async () => {
     const result = await processMembership({
       registration: baseRegistration,

@@ -167,6 +167,7 @@ export function AdminDashboardPage() {
       });
       if (result.registration) setSelected(result.registration);
       if (result.message) setNotice(result.message);
+      if (path.endsWith('/retry')) setNotice('This registration is queued again.');
       await load();
     } catch (err) {
       handleAuthError(err);
@@ -385,6 +386,7 @@ export function AdminDashboardPage() {
                 <th>Contact</th>
                 <th>Status</th>
                 <th>Payment</th>
+                <th>Action</th>
               </tr>
             </thead>
             <tbody>
@@ -400,6 +402,21 @@ export function AdminDashboardPage() {
                   <td>{contactStatusLabel(row.contactSaved)}</td>
                   <td><span className={`pill pill-${row.status}`}>{STATUS_LABELS[row.status] || row.status}</span></td>
                   <td>{PAYMENT_LABELS[row.paymentStatus] || row.paymentStatus}</td>
+                  <td>
+                    {row.retryable ? (
+                      <button
+                        type="button"
+                        className="compact"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setSelected(row);
+                          act(`/api/admin/registrations/${row.id}/retry`);
+                        }}
+                      >
+                        Retry
+                      </button>
+                    ) : '—'}
+                  </td>
                 </tr>
               ))}
             </tbody>

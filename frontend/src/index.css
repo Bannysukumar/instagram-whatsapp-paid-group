@@ -180,6 +180,7 @@ button.ghost {
   border: 1px solid #cfd6d1;
 }
 button.ghost:hover { background: #f4f6f3; }
+button.compact { padding: 7px 12px; border-radius: 8px; font-size: 0.85rem; }
 
 .check {
   display: flex;

@@ -152,7 +152,7 @@ export async function processMembership({ registration, settings, config, whatsa
     action: 'direct_add_unavailable',
     actionNote: reason,
   }));
-  if (/interface_changed|add_control_missing|group_not_opened/.test(String(reason))) {
+  if (/interface_changed|add_control_missing|group_not_opened|group_not_found/.test(String(reason))) {
     return { ...held, retryable: true };
   }
   return held;

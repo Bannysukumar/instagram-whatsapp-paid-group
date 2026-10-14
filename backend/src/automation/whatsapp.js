@@ -134,22 +134,47 @@ async function clickExactText(page, pattern, { skipChatList = false } = {}) {
   return true;
 }
 
-async function openGroup(page, { groupName, inviteLink }) {
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+async function returnToChatList(page) {
+  const side = page.locator('#pane-side');
+  if (await side.isVisible().catch(() => false)) return true;
+  await page.goto('https://web.whatsapp.com/', { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
+  const ready = await side.waitFor({ timeout: 20000 }).then(() => true).catch(() => false);
+  if (ready) await dismissWhatsAppPopups(page);
+  return ready;
+}
+
+async function searchAndOpenGroup(page, groupName) {
+  if (!await returnToChatList(page)) return false;
   await page.keyboard.press('Escape').catch(() => {});
-  const chatSearch = page.getByRole('textbox', { name: /search or start a new chat/i }).first();
-  if (await chatSearch.isVisible().catch(() => false)) {
-    await chatSearch.fill('').catch(() => {});
-    await page.waitForTimeout(500);
+  const side = page.locator('#pane-side');
+  const visible = side.getByText(groupName, { exact: true }).first();
+  if (await visible.isVisible().catch(() => false)) {
+    await visible.click({ timeout: 8000 }).catch(() => {});
+    await page.waitForTimeout(1500);
+    if (await groupHeaderVisible(page, groupName)) return true;
   }
 
-  if (groupName) {
-    const row = page.locator('#pane-side').getByText(groupName, { exact: true }).first();
-    if (await row.isVisible().catch(() => false)) {
-      await row.click({ timeout: 8000 }).catch(() => {});
-      await page.waitForTimeout(1500);
-      if (await groupHeaderVisible(page, groupName)) return { opened: true };
-    }
-  }
+  const chatSearch = page.getByRole('textbox', { name: /search or start a new chat/i }).first();
+  const openedSearch = await chatSearch.click({ timeout: 8000 }).then(() => true).catch(() => false);
+  if (!openedSearch) return false;
+  await chatSearch.fill('').catch(() => {});
+  await page.keyboard.type(groupName, { delay: 40 });
+  await page.waitForTimeout(2500);
+  const row = side.getByText(groupName, { exact: false }).first();
+  const clicked = await row.click({ timeout: 8000 }).then(() => true).catch(() => false)
+    || await clickExactText(page, new RegExp(`^${escapeRegExp(groupName)}$`, 'i'));
+  await page.waitForTimeout(1500);
+  await chatSearch.fill('').catch(() => {});
+  return clicked && await groupHeaderVisible(page, groupName);
+}
+
+async function openGroup(page, { groupName, inviteLink }) {
+  await dismissWhatsAppPopups(page);
+  if (groupName && await searchAndOpenGroup(page, groupName)) return { opened: true };
 
   const code = inviteCodeFromLink(inviteLink);
   if (code) {
@@ -174,21 +199,8 @@ async function openGroup(page, { groupName, inviteLink }) {
   }
 
   if (!groupName) return { opened: false, reason: 'group_name_missing' };
-
-  const side = page.locator('#pane-side');
-  try {
-    await side.waitFor({ timeout: 10000 });
-    const searchBox = side.locator('[contenteditable="true"]').first();
-    await searchBox.click({ timeout: 8000 });
-    await searchBox.fill('');
-    await page.keyboard.type(groupName, { delay: 20 });
-    await side.getByText(groupName, { exact: false }).first().click({ timeout: 8000 });
-    await page.waitForTimeout(1500);
-    if (await groupHeaderVisible(page, groupName)) return { opened: true };
-    return { opened: false, reason: 'group_not_opened' };
-  } catch {
-    return { opened: false, reason: 'group_not_found' };
-  }
+  if (await searchAndOpenGroup(page, groupName)) return { opened: true };
+  return { opened: false, reason: 'group_not_opened' };
 }
 
 async function pause(page, milliseconds) {
