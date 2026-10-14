@@ -48,10 +48,11 @@ describe('status transitions', () => {
     assert.equal(ready.status, 'invite_ready');
     assert.equal(ready.action, 'direct_add_unavailable');
 
-    const blocked = await request(app)
+    const again = await request(app)
       .post(`/api/admin/registrations/${failed.id}/retry`)
       .set('Authorization', `Bearer ${token}`);
-    assert.equal(blocked.status, 400);
+    assert.equal(again.status, 200);
+    await queue.whenIdle();
 
     const unattested = await request(app)
       .post(`/api/admin/registrations/${failed.id}/confirm`)

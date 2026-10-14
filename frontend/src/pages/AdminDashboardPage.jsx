@@ -449,7 +449,7 @@ export function AdminDashboardPage() {
             </button>
             {selected.retryable && (
               <button type="button" onClick={() => act(`/api/admin/registrations/${selected.id}/retry`)}>
-                Retry group add
+                Retry
               </button>
             )}
           </div>

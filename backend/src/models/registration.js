@@ -116,12 +116,11 @@ export function contactSaveSummary(registration) {
   return { contactSaved: null, contactSavedName: null, contactSaveReason: null };
 }
 
-const RETRY_NOTE = /interface_changed|add_control_missing|group_not_opened|group_not_found/;
-
 export function canRetryRegistration(registration) {
   if (!registration) return false;
-  if (!['failed', 'invite_ready', 'pending_admission'].includes(registration.status)) return false;
-  return Boolean(registration.retryable) || RETRY_NOTE.test(String(registration.actionNote || ''));
+  if (registration.status === 'processing') return false;
+  if (registration.paymentStatus === 'pending' || registration.paymentStatus === 'failed') return false;
+  return true;
 }
 
 export function adminView(registration) {
