@@ -518,7 +518,11 @@ async function addPersonWhoCanJoin(page, { groupName, phone, inviteLink, contact
   await pause(page, 1000);
   await keepOnlyNamedContact(page, savedName);
   const confirmed = await clickAddConfirm(page);
-  if (!confirmed) {
+  if (confirmed && await addMemberPickerOpen(page)) {
+    await pause(page, 500);
+    await clickAddConfirm(page);
+  }
+  if (!confirmed || await addMemberPickerOpen(page)) {
     await page.keyboard.press('Escape').catch(() => {});
     const sent = await sendPrivateInvite(page, contact, verified);
     if (sent) return sent;
@@ -743,33 +747,75 @@ async function keepOnlyNamedContact(page, name) {
   return true;
 }
 
-async function clickAddConfirm(page) {
-  const point = await page.evaluate(() => {
+async function addMemberConfirmPoint(page) {
+  return page.evaluate(() => {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    let heading = null;
+    while (node) {
+      const value = (node.textContent || '').replace(/\s+/g, ' ').trim();
+      const parent = node.parentElement;
+      if (/^add member$/i.test(value) && parent && !parent.closest('#pane-side')) {
+        const rect = parent.getBoundingClientRect();
+        if (rect.width >= 8 && rect.height >= 8) {
+          heading = parent;
+          break;
+        }
+      }
+      node = walker.nextNode();
+    }
+    if (!heading) return { open: false, point: null };
+    let panel = heading;
+    let box = null;
+    while (panel && panel !== document.body) {
+      const rect = panel.getBoundingClientRect();
+      const hasSearch = Boolean(panel.querySelector('input, textarea, [contenteditable="true"]'));
+      if (hasSearch && rect.width >= 240 && rect.height >= 220 && rect.width < window.innerWidth * 0.92) box = panel;
+      panel = panel.parentElement;
+    }
+    if (!box) return { open: true, point: null };
+    const boxRect = box.getBoundingClientRect();
     const hits = [];
-    const consider = (el, prefer) => {
-      if (!el || el.closest('#pane-side')) return;
-      const rect = el.getBoundingClientRect();
-      if (rect.width < 16 || rect.height < 16 || rect.x < window.innerWidth * 0.35) return;
+    const push = (rect, prefer) => {
+      if (rect.width < 28 || rect.height < 28) return;
+      if (rect.x < boxRect.x + boxRect.width * 0.45) return;
       hits.push({
         x: rect.x + rect.width / 2,
         y: rect.y + rect.height / 2,
-        bottom: rect.bottom,
         prefer,
+        area: rect.width * rect.height,
       });
     };
-    for (const icon of document.querySelectorAll('[data-icon]')) {
-      const iconName = icon.getAttribute('data-icon') || '';
-      if (!/check/i.test(iconName)) continue;
-      consider(icon.closest('button, [role="button"]') || icon, 2);
+    for (const icon of box.querySelectorAll('[data-icon]')) {
+      if (!/check/i.test(icon.getAttribute('data-icon') || '')) continue;
+      const target = icon.closest('button, [role="button"]') || icon.parentElement || icon;
+      push(target.getBoundingClientRect(), 3);
     }
-    for (const el of document.querySelectorAll('button, [role="button"]')) {
-      const label = (el.getAttribute('aria-label') || el.innerText || '').replace(/\s+/g, ' ').trim();
-      if (/^add member$/i.test(label) || /^confirm$|^done$/i.test(label)) consider(el, 1);
+    for (const el of box.querySelectorAll('button, [role="button"], div, span')) {
+      const label = (el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+      const text = [...el.childNodes].filter((child) => child.nodeType === 3).map((child) => child.textContent || '').join(' ').replace(/\s+/g, ' ').trim();
+      const rect = el.getBoundingClientRect();
+      const labeled = /^add member$/i.test(label) || /^confirm$|^done$/i.test(label) || /^add member$/i.test(text);
+      const round = rect.width >= 36 && rect.width <= 80 && rect.height >= 36 && rect.height <= 80
+        && Math.abs(rect.width - rect.height) < 14
+        && rect.bottom > boxRect.bottom - 96
+        && rect.right > boxRect.right - 140;
+      if (labeled) push(rect, 2);
+      else if (round) push(rect, 1);
     }
-    hits.sort((a, b) => b.prefer - a.prefer || b.bottom - a.bottom);
-    return hits[0] || null;
-  }).catch(() => null);
-  if (!point) return false;
-  await page.mouse.click(point.x, point.y).catch(() => {});
+    hits.sort((a, b) => b.prefer - a.prefer || b.area - a.area);
+    return { open: true, point: hits[0] || null };
+  }).catch(() => ({ open: false, point: null }));
+}
+
+async function addMemberPickerOpen(page) {
+  const found = await addMemberConfirmPoint(page);
+  return Boolean(found?.open);
+}
+
+async function clickAddConfirm(page) {
+  const found = await addMemberConfirmPoint(page);
+  if (!found?.point) return false;
+  await page.mouse.click(found.point.x, found.point.y).catch(() => {});
   return true;
 }
