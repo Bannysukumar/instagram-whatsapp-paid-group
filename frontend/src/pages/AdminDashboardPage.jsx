@@ -74,6 +74,7 @@ export function AdminDashboardPage() {
   const [error, setError] = useState('');
   const [confirmed, setConfirmed] = useState(false);
   const [shotUrl, setShotUrl] = useState('');
+  const [liveAction, setLiveAction] = useState('');
   const [qrUrl, setQrUrl] = useState('');
   const [waView, setWaView] = useState(null);
   const [logoutArmed, setLogoutArmed] = useState(false);
@@ -122,7 +123,7 @@ export function AdminDashboardPage() {
   }, [automation?.queueLength, automation?.activeJobId, automation?.checking, automation?.lastCheckedAt, query, waView]);
 
   useEffect(() => {
-    if (!waView) return undefined;
+    if (waView !== 'scanner') return undefined;
     const timer = setInterval(() => {
       api('/api/admin/automation/refresh', { method: 'POST' })
         .then(() => load(query))
@@ -134,16 +135,41 @@ export function AdminDashboardPage() {
   }, [waView, query]);
 
   useEffect(() => {
-    if (waView !== 'whatsapp' || !automation?.screenshotAvailable) return undefined;
-    let cancelled = false;
-    const token = sessionStorage.getItem('wg_admin_token');
-    readImage('/api/admin/automation/screenshot', token).then((nextUrl) => {
-      if (!cancelled && nextUrl) setShotUrl(nextUrl);
-    }).catch(() => undefined);
+    if (waView !== 'whatsapp') return undefined;
+    let stopped = false;
+    let running = false;
+    async function tick() {
+      if (stopped || running) return;
+      running = true;
+      try {
+        const token = sessionStorage.getItem('wg_admin_token');
+        const response = await fetch(`/api/admin/automation/screenshot?ts=${Date.now()}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          cache: 'no-store',
+        });
+        if (!response.ok || stopped) return;
+        setLiveAction(response.headers.get('X-WhatsApp-Activity') || 'Waiting');
+        const blob = await response.blob();
+        const url = await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ''));
+          reader.onerror = () => resolve('');
+          reader.readAsDataURL(blob);
+        });
+        if (!stopped && url) setShotUrl(url);
+      } catch {
+        // Keep the last frame on screen.
+      } finally {
+        running = false;
+      }
+    }
+    tick();
+    const timer = setInterval(tick, 700);
     return () => {
-      cancelled = true;
+      stopped = true;
+      clearInterval(timer);
     };
-  }, [waView, automation?.screenshotAvailable, automation?.lastCheckedAt]);
+  }, [waView]);
 
   useEffect(() => {
     if (waView !== 'scanner' || !automation?.qrAvailable) return undefined;
@@ -317,8 +343,9 @@ export function AdminDashboardPage() {
         {waView === 'whatsapp' && (
           <div className="viewer">
             <h3>WhatsApp on this server</h3>
+            <p className="muted live-action">{liveAction || (waBusy ? 'Opening WhatsApp…' : 'Waiting')}</p>
             {shotUrl ? (
-              <img className="session-shot" src={shotUrl} alt="WhatsApp on the server" />
+              <img className="session-shot" src={shotUrl} alt="Live WhatsApp on the server" />
             ) : (
               <p className="muted">{waBusy || automation?.checking ? 'Opening WhatsApp…' : 'The WhatsApp view will appear here.'}</p>
             )}

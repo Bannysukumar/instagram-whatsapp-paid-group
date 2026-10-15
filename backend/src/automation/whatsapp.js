@@ -1,4 +1,5 @@
 import { parsePhoneNumberFromString } from 'libphonenumber-js';
+import { setLiveActivity } from './browser.js';
 import { classifyLoginSignals } from './loginState.js';
 
 async function readSignals(page) {
@@ -392,12 +393,21 @@ async function verifyContactSaved(page, { name, phone }) {
  * It does not send messages or repeat the attempt.
  */
 export async function tryAddParticipant(page, { groupName, phone, inviteLink, contactName }) {
+  const direct = await addPersonWhoCanJoin(page, { groupName, phone, inviteLink, contactName });
+  if (direct?.reason !== 'add_control_missing') return direct;
+  const invited = await inviteByGroupLink(page, direct.contact, contactName, phone);
+  return invited || direct;
+}
+
+async function addPersonWhoCanJoin(page, { groupName, phone, inviteLink, contactName }) {
+  setLiveActivity('Saving the contact');
   await dismissWhatsAppPopups(page);
   const contact = await saveContact(page, { name: contactName, phone });
   if (!contact.saved) {
     return { outcome: 'not_selectable', reason: 'contact_not_saved', contact };
   }
 
+  setLiveActivity('Checking the saved contact');
   const verified = await verifyContactSaved(page, { name: contactName, phone });
   if (!verified.found) {
     return {
@@ -411,6 +421,7 @@ export async function tryAddParticipant(page, { groupName, phone, inviteLink, co
   if (await rateLimitVisible(page)) {
     return { outcome: 'rate_limited', reason: 'whatsapp_limit', contact: { ...contact, ...verified } };
   }
+  setLiveActivity('Opening the group');
   const opened = await openGroup(page, { groupName, inviteLink });
   if (!opened.opened) {
     return { outcome: 'ui_unavailable', reason: opened.reason || 'group_not_found', contact: { ...contact, ...verified } };
@@ -418,16 +429,54 @@ export async function tryAddParticipant(page, { groupName, phone, inviteLink, co
 
   await pause(page, 2000);
   await dismissWhatsAppPopups(page);
-  const input = await openAddPanel(page, groupName);
-  if (!input) {
+  const infoOpen = await page.getByText(/^group info$/i).first().isVisible().catch(() => false);
+  if (!infoOpen) {
+    const title = page.locator('#main header').getByText(groupName, { exact: false }).first();
+    if (await title.isVisible().catch(() => false)) {
+      await title.click({ timeout: 8000 }).catch(() => {});
+    } else {
+      await page.locator('#main header').first().click({ timeout: 8000 }).catch(() => {});
+    }
+    await pause(page, 1500);
+  }
+  await dismissWhatsAppPopups(page);
+
+  setLiveActivity('Opening Add');
+  let addOpened = false;
+  for (let attempt = 0; attempt < 3 && !addOpened; attempt += 1) {
+    const groupAdd = page.getByRole('button', { name: /^add$/i }).last();
+    addOpened = await groupAdd.click({ timeout: 4000 }).then(() => true).catch(() => false);
+    if (!addOpened) addOpened = await clickExactText(page, /^add$/i, { skipChatList: true });
+    if (!addOpened) addOpened = await clickExactText(page, /^add members?$/i, { skipChatList: true });
+    if (!addOpened) {
+      const addButton = page.getByRole('button', { name: /add participant|add member|add members/i }).first();
+      addOpened = await addButton.click({ timeout: 4000 }).then(() => true).catch(() => false);
+    }
+    if (!addOpened) {
+      await page.locator('#main header').getByText(groupName, { exact: false }).first().click({ timeout: 4000 }).catch(() => {});
+      await pause(page, 1000);
+    }
+  }
+  if (!addOpened) {
     return { outcome: 'ui_unavailable', reason: 'add_control_missing', contact: { ...contact, ...verified } };
   }
-  await pause(page, 1000);
+  await pause(page, 2000);
+
+  const dialog = page.locator('[role="dialog"]').last();
+  const byPlaceholder = page.getByPlaceholder(/search name or number|name or number/i).last();
+  const byRole = page.getByRole('textbox', { name: /search name or number|search contacts/i }).last();
+  const inDialog = dialog.locator('[contenteditable="true"], input').first();
+  const input = await byPlaceholder.isVisible().catch(() => false)
+    ? byPlaceholder
+    : await byRole.isVisible().catch(() => false)
+      ? byRole
+      : inDialog;
   try {
     await input.click({ timeout: 8000 });
   } catch {
     return { outcome: 'ui_unavailable', reason: 'add_control_missing', contact: { ...contact, ...verified } };
   }
+  setLiveActivity('Searching for the contact');
   const savedName = String(contactName || '').slice(0, 25);
   await page.keyboard.type(savedName || phone, { delay: 120 });
   await pause(page, 4000);
@@ -441,16 +490,15 @@ export async function tryAddParticipant(page, { groupName, phone, inviteLink, co
     return { outcome: 'rate_limited', reason: 'whatsapp_limit', contact: { ...contact, ...verified } };
   }
 
-  const blocked = page.getByText(/couldn.t add|could not add|invite them privately|isn't on whatsapp|can't add|cannot add/i).first();
-  if (await blocked.isVisible().catch(() => false)) {
-    const sent = await sendPrivateInvite(page, contact, verified);
-    if (sent) return sent;
+  const noMatch = dialog.getByText(/no chats, contacts or messages found|no contacts found|no results|isn't on whatsapp/i);
+  if (await noMatch.isVisible().catch(() => false)) {
+    return { outcome: 'not_selectable', reason: 'number_not_recognized', contact: { ...contact, ...verified } };
   }
 
   const namePattern = new RegExp(escapeRegExp(savedName), 'i');
   let picked = await clickExactText(page, namePattern, { skipChatList: true, skipEditable: true });
   if (!picked) {
-    const named = page.getByText(savedName, { exact: false }).first();
+    const named = dialog.getByText(savedName, { exact: false }).first();
     picked = await named.isVisible().catch(() => false)
       ? await named.click({ timeout: 8000 }).then(() => true).catch(() => false)
       : false;
@@ -473,6 +521,7 @@ export async function tryAddParticipant(page, { groupName, phone, inviteLink, co
   if (await alreadyAdded.isVisible().catch(() => false)) {
     return { outcome: 'added_confirmed', reason: 'already_in_group', contact: { ...contact, ...verified } };
   }
+  setLiveActivity('Confirming the add');
   await pause(page, 2000);
   const confirmed = await clickAddConfirm(page);
   if (!confirmed) {
@@ -480,6 +529,7 @@ export async function tryAddParticipant(page, { groupName, phone, inviteLink, co
     if (sent) return sent;
     return { outcome: 'ui_unavailable', reason: 'add_control_missing', contact: { ...contact, ...verified } };
   }
+  setLiveActivity('Waiting for WhatsApp to confirm');
   const deadline = Date.now() + 12000;
   while (Date.now() < deadline) {
     if (await confirmAddDialog(page)) await pause(page, 1500);
@@ -493,38 +543,41 @@ export async function tryAddParticipant(page, { groupName, phone, inviteLink, co
   return { outcome: 'submitted_unconfirmed', reason: 'no_membership_callback', contact: { ...contact, ...verified } };
 }
 
-async function openAddPanel(page, groupName) {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const infoOpen = await page.getByText(/^group info$/i).first().isVisible().catch(() => false);
-    if (!infoOpen) {
-      const title = page.locator('#main header').getByText(groupName, { exact: false }).first();
-      if (await title.isVisible().catch(() => false)) {
-        await title.click({ timeout: 8000 }).catch(() => {});
-      } else {
-        await page.locator('#main header').first().click({ timeout: 8000 }).catch(() => {});
-      }
-      await pause(page, 1500);
-    }
-    await dismissWhatsAppPopups(page);
-    let clicked = await clickExactText(page, /^add member$/i, { skipChatList: true, skipEditable: true });
-    if (!clicked) {
-      const groupAdd = page.getByRole('button', { name: /^add$/i }).last();
-      clicked = await groupAdd.click({ timeout: 4000 }).then(() => true).catch(() => false);
-    }
-    if (!clicked) clicked = await clickExactText(page, /^add$/i, { skipChatList: true, skipEditable: true });
-    await pause(page, 2500);
-    const byPlaceholder = page.getByPlaceholder(/search name or number|name or number/i).last();
-    const byRole = page.getByRole('textbox', { name: /search name or number|search contacts/i }).last();
-    if (await byPlaceholder.isVisible().catch(() => false)) return byPlaceholder;
-    if (await byRole.isVisible().catch(() => false)) return byRole;
-    await page.keyboard.press('Escape').catch(() => {});
-    await pause(page, 1000);
+async function inviteByGroupLink(page, contact, contactName, phone) {
+  const already = await sendPrivateInvite(page, contact, contact);
+  if (already) return already;
+  setLiveActivity('Sending the group invite link');
+  let opened = await clickExactText(page, /^invite to group via link$/i, { skipChatList: true, skipEditable: true });
+  if (!opened) {
+    const linkRow = page.getByRole('button', { name: /invite to group via link/i }).first();
+    opened = await linkRow.click({ timeout: 4000 }).then(() => true).catch(() => false);
   }
-  return null;
+  if (!opened) return null;
+  await pause(page, 1500);
+  const sendVia = page.getByRole('button', { name: /send link via whatsapp/i }).first();
+  let sending = await sendVia.click({ timeout: 4000 }).then(() => true).catch(() => false);
+  if (!sending) sending = await clickExactText(page, /^send link via whatsapp$/i, { skipChatList: true, skipEditable: true });
+  if (!sending) return null;
+  await pause(page, 1500);
+  const savedName = String(contactName || '').slice(0, 25);
+  const search = page.getByPlaceholder(/search name or number|name or number/i).last();
+  if (await search.isVisible().catch(() => false)) {
+    await search.click({ timeout: 4000 }).catch(() => {});
+    await page.keyboard.type(savedName || phone, { delay: 80 });
+    await pause(page, 2000);
+  }
+  const picked = await clickExactText(page, new RegExp(escapeRegExp(savedName), 'i'), { skipChatList: true, skipEditable: true });
+  if (!picked) return null;
+  await pause(page, 1000);
+  const sent = await confirmInviteSend(page);
+  if (!sent) return null;
+  await pause(page, 2000);
+  return { outcome: 'invite_sent', reason: 'group_link_sent', contact };
 }
 
 async function sendPrivateInvite(page, contact, verified) {
   const refused = await page.getByText(/couldn.t add|could not add|invite them privately/i).first().isVisible().catch(() => false);
+  if (refused) setLiveActivity('Sending the group invite');
   if (!refused) return null;
   await pause(page, 1200);
   const invited = await clickPrivateInvite(page);

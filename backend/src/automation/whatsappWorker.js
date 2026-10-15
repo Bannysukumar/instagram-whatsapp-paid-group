@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { resetPersistentProfile, withWhatsAppPage } from './browser.js';
+import { resetPersistentProfile, withWhatsAppPage, liveActivity as readLiveActivity, liveFrame as readLiveFrame, setLiveActivity } from './browser.js';
 import { browserFailureCode } from './loginState.js';
 import { detectPageLoginState, readPageLoginState, tryAddParticipant } from './whatsapp.js';
 
@@ -46,6 +46,7 @@ export function createAutomation({ dataDir }) {
       const session = await withWhatsAppPage(dataDir, async (page) => {
         const login = await detectPageLoginState(page);
         await storeView(page, login);
+        setLiveActivity(login === 'authenticated' ? 'WhatsApp is open' : 'Waiting for a WhatsApp scan');
         return login;
       });
       return { state: session };
@@ -64,12 +65,19 @@ export function createAutomation({ dataDir }) {
         checking: state.checking,
         lastError: state.lastError,
         lastCheckedAt: state.lastCheckedAt,
-        screenshotAvailable: Boolean(state.screenshotFile),
+        screenshotAvailable: Boolean(state.screenshotFile) || Boolean(readLiveFrame()),
         qrAvailable: Boolean(state.qrFile),
+        activity: readLiveActivity(),
       };
     },
     screenshotFile() {
       return state.screenshotFile;
+    },
+    liveFrame() {
+      return readLiveFrame();
+    },
+    liveActivity() {
+      return readLiveActivity();
     },
     qrFile() {
       return state.qrFile;
@@ -126,11 +134,13 @@ export function createAutomation({ dataDir }) {
         state.session = login;
         state.lastCheckedAt = new Date().toISOString();
         if (login !== 'authenticated') {
+          setLiveActivity('Waiting for a WhatsApp scan');
           state.screenshotFile = await saveShot(dataDir, page, 'session.png').catch(() => state.screenshotFile);
           return { outcome: 'session_required', reason: login };
         }
         try {
           const result = await tryAddParticipant(page, args);
+          setLiveActivity('WhatsApp is idle');
           state.screenshotFile = await saveShot(dataDir, page, 'last-add.png').catch(() => state.screenshotFile);
           return result;
         } catch (error) {

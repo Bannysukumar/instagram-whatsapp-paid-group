@@ -58,10 +58,53 @@ export async function resetPersistentProfile(dataDir) {
   });
 }
 
+const liveView = {
+  frame: null,
+  activity: 'Waiting',
+};
+const streamingPages = new WeakSet();
+
+export function setLiveActivity(activity) {
+  liveView.activity = String(activity || 'Waiting');
+}
+
+export function liveFrame() {
+  return liveView.frame;
+}
+
+export function liveActivity() {
+  return liveView.activity;
+}
+
+export async function startLiveView(page) {
+  if (!page || streamingPages.has(page)) return;
+  streamingPages.add(page);
+  try {
+    const client = await page.context().newCDPSession(page);
+    client.on('Page.screencastFrame', (frame) => {
+      liveView.frame = Buffer.from(frame.data, 'base64');
+      client.send('Page.screencastFrameAck', { sessionId: frame.sessionId }).catch(() => {});
+    });
+    await client.send('Page.startScreencast', {
+      format: 'jpeg',
+      quality: 40,
+      maxWidth: 1280,
+      maxHeight: 800,
+      everyNthFrame: 2,
+    });
+    page.on('close', () => {
+      liveView.frame = null;
+    });
+  } catch {
+    streamingPages.delete(page);
+  }
+}
+
 export async function withWhatsAppPage(dataDir, fn) {
   return withBrowserLock(async () => {
     const context = await launchContext(dataDir);
     const page = context.pages()[0] || await context.newPage();
+    await startLiveView(page);
     return fn(page);
   });
 }

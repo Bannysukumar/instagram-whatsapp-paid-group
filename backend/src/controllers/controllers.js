@@ -105,6 +105,7 @@ export function createAdminController({ registrations, store, config, automation
         lastError: null,
         lastCheckedAt: null,
         screenshotAvailable: false,
+        activity: 'Waiting',
       };
       res.json({
         ...worker,
@@ -163,6 +164,14 @@ export function createAdminController({ registrations, store, config, automation
       res.json({ session: automation.getStatus().session });
     },
     async screenshot(_req, res) {
+      const activity = automation?.liveActivity?.() || 'Waiting';
+      res.set('Cache-Control', 'no-store');
+      res.set('X-WhatsApp-Activity', activity);
+      const live = automation?.liveFrame?.();
+      if (live?.length) {
+        res.type('image/jpeg').send(live);
+        return;
+      }
       const file = automation?.screenshotFile?.();
       if (!file) throw new HttpError(404, 'not_found', 'No browser screenshot is available yet.');
       res.sendFile(file);
