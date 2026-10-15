@@ -1,4 +1,5 @@
 import { parsePhoneNumberFromString } from 'libphonenumber-js';
+import { planAddMemberDialog } from './addMemberDialog.js';
 import { setLiveActivity } from './browser.js';
 import { classifyLoginSignals } from './loginState.js';
 
@@ -215,10 +216,15 @@ async function pause(page, milliseconds) {
 
 
 async function saveContact(page, { name, phone }) {
-  await pause(page, 1500);
+  await pause(page, 800);
+  await dismissSyncBanner(page);
+  if (await phoneAlreadyListed(page, phone)) return { saved: true, reason: 'already_in_contacts' };
+
+  const parsedForOpen = parsePhoneNumberFromString(phone);
+  const nationalForOpen = parsedForOpen?.nationalNumber || String(phone).replace(/\D/g, '').slice(-10);
+  let opened = await openNumberedContact(page, nationalForOpen);
   const direct = page.getByRole('button', { name: /^add contact$/i }).first();
-  let opened = false;
-  if (await direct.isVisible().catch(() => false)) {
+  if (!opened && await direct.isVisible().catch(() => false)) {
     opened = await direct.click({ timeout: 8000 }).then(() => true).catch(() => false);
   }
   if (!opened) {
@@ -290,22 +296,29 @@ async function saveContact(page, { name, phone }) {
     }
   }
 
-  const phoneBox = form.getByRole('textbox', { name: /^phone$|phone number|mobile/i }).first();
-  const placeholder = form.getByPlaceholder(/phone|mobile/i).first();
-  const tel = form.locator('input[type="tel"], input[inputmode="tel"]').last();
-  const phoneField = await phoneBox.isVisible().catch(() => false)
-    ? phoneBox
-    : await placeholder.isVisible().catch(() => false)
-      ? placeholder
-      : await tel.isVisible().catch(() => false)
-        ? tel
-        : null;
-  if (!phoneField) return { saved: false, reason: 'phone_field_missing' };
-  await phoneField.click();
+  let phoneField = null;
+  for (let attempt = 0; attempt < 4 && !phoneField; attempt += 1) {
+    await scrollContactForm(page);
+    await page.mouse.wheel(0, 280).catch(() => {});
+    phoneField = await findPhoneField(page);
+    if (!phoneField) await pause(page, 700);
+  }
+  if (!phoneField) {
+    const shown = nationalNumber
+      ? await page.getByText(new RegExp(String(nationalNumber).slice(-5))).first().isVisible().catch(() => false)
+      : false;
+    if (!shown) return { saved: false, reason: 'phone_field_missing' };
+  } else {
+  try {
+    await phoneField.click({ timeout: 4000 });
+  } catch {
+    return { saved: false, reason: 'phone_field_missing' };
+  }
   await pause(page, 500);
   await phoneField.fill('');
   await phoneField.pressSequentially(nationalNumber, { delay: 120 });
   await pause(page, 2000);
+  }
 
   const alreadySaved = page.getByText(/already in your contacts/i).first();
   if (await alreadySaved.isVisible().catch(() => false)) {
@@ -332,9 +345,9 @@ async function saveContact(page, { name, phone }) {
   const save = page.getByRole('button', { name: /save contact|^save$|^done$/i }).last();
   const check = page.locator('[data-icon="checkmark"], [data-icon="check"], [data-icon="wds-ic-check"]').last();
   if (await save.isVisible().catch(() => false)) {
-    await save.click();
+    await save.click({ timeout: 5000 });
   } else if (await check.isVisible().catch(() => false)) {
-    await check.click();
+    await check.click({ timeout: 5000 });
   } else {
     return { saved: false, reason: 'save_contact_missing' };
   }
@@ -481,8 +494,7 @@ async function addPersonWhoCanJoin(page, { groupName, phone, inviteLink, contact
   await page.keyboard.type(savedName || phone, { delay: 120 });
   await pause(page, 4000);
 
-  const alreadyAdded = page.getByText(/already added to group/i).first();
-  if (await alreadyAdded.isVisible().catch(() => false)) {
+  if (await membershipNoticeVisible(page, savedName)) {
     return { outcome: 'added_confirmed', reason: 'already_in_group', contact: { ...contact, ...verified } };
   }
 
@@ -495,35 +507,36 @@ async function addPersonWhoCanJoin(page, { groupName, phone, inviteLink, contact
     return { outcome: 'not_selectable', reason: 'number_not_recognized', contact: { ...contact, ...verified } };
   }
 
-  const picked = await keepOnlyNamedContact(page, savedName);
-  if (!picked) {
+  let plan = await focusNamedContact(page, savedName);
+  if (!plan?.open) {
+    return { outcome: 'ui_unavailable', reason: 'add_control_missing', contact: { ...contact, ...verified } };
+  }
+  if (!plan.select && plan.removes.length === 0 && !plan.confirm) {
     await input.fill('').catch(() => {});
     const digits = String(phone || '').replace(/\D/g, '').slice(-10);
     if (digits) await page.keyboard.type(digits, { delay: 120 });
     await pause(page, 3000);
-    const byDigits = digits
-      ? await clickExactText(page, new RegExp(digits), { skipChatList: true, skipEditable: true })
-      : false;
-    if (await alreadyAdded.isVisible().catch(() => false)) {
+    plan = await focusNamedContact(page, digits);
+    if (await membershipNoticeVisible(page, savedName)) {
       return { outcome: 'added_confirmed', reason: 'already_in_group', contact: { ...contact, ...verified } };
     }
-    if (!byDigits) {
+    if (!plan?.confirm && !plan?.select) {
+      await closeAddMemberDialog(page);
       return { outcome: 'not_selectable', reason: 'number_not_recognized', contact: { ...contact, ...verified } };
     }
   }
-  if (await alreadyAdded.isVisible().catch(() => false)) {
+  if (await membershipNoticeVisible(page, savedName)) {
     return { outcome: 'added_confirmed', reason: 'already_in_group', contact: { ...contact, ...verified } };
   }
   setLiveActivity('Confirming the add');
-  await pause(page, 1000);
-  await keepOnlyNamedContact(page, savedName);
-  const confirmed = await clickAddConfirm(page);
-  if (confirmed && await addMemberPickerOpen(page)) {
-    await pause(page, 500);
-    await clickAddConfirm(page);
-  }
+  await pause(page, 600);
+  plan = await focusNamedContact(page, savedName);
+  const confirmed = Boolean(plan?.confirm) && await clickPoint(page, plan.confirm);
   if (!confirmed || await addMemberPickerOpen(page)) {
-    await page.keyboard.press('Escape').catch(() => {});
+    await closeAddMemberDialog(page);
+    if (await addMemberPickerOpen(page)) {
+      return { outcome: 'ui_unavailable', reason: 'add_control_missing', contact: { ...contact, ...verified } };
+    }
     const sent = await sendPrivateInvite(page, contact, verified);
     if (sent) return sent;
     return { outcome: 'ui_unavailable', reason: 'add_control_missing', contact: { ...contact, ...verified } };
@@ -534,7 +547,7 @@ async function addPersonWhoCanJoin(page, { groupName, phone, inviteLink, contact
     if (await confirmAddDialog(page)) await pause(page, 1500);
     const sent = await sendPrivateInvite(page, contact, verified);
     if (sent) return sent;
-    if (await membershipNoticeVisible(page)) {
+    if (await membershipNoticeVisible(page, savedName)) {
       return { outcome: 'added_confirmed', reason: 'whatsapp_added_notice', contact: { ...contact, ...verified } };
     }
     await pause(page, 500);
@@ -543,6 +556,10 @@ async function addPersonWhoCanJoin(page, { groupName, phone, inviteLink, contact
 }
 
 async function inviteByGroupLink(page, contact, contactName, phone) {
+  if (await addMemberPickerOpen(page)) {
+    await closeAddMemberDialog(page);
+    if (await addMemberPickerOpen(page)) return null;
+  }
   const already = await sendPrivateInvite(page, contact, contact);
   if (already) return already;
   setLiveActivity('Sending the group invite link');
@@ -600,23 +617,156 @@ async function sendPrivateInvite(page, contact, verified) {
   return { outcome: 'invite_sent', reason: 'private_invite_sent', contact: { ...contact, ...verified } };
 }
 
-async function membershipNoticeVisible(page) {
-  return page.evaluate(() => {
+async function membershipNoticeVisible(page, name) {
+  const wanted = String(name || '').trim().toLowerCase();
+  if (!wanted) return false;
+  return page.evaluate((wantedName) => {
+    const visible = (node) => {
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rect = range.getBoundingClientRect();
+      return rect.width >= 4 && rect.height >= 4;
+    };
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     let node = walker.nextNode();
     while (node) {
       const value = (node.textContent || '').replace(/\s+/g, ' ').trim();
       const parent = node.parentElement;
-      if (/you added |already added to group/i.test(value) && parent && !parent.closest('#pane-side')) {
-        const range = document.createRange();
-        range.selectNodeContents(node);
-        const rect = range.getBoundingClientRect();
-        if (rect.width >= 4 && rect.height >= 4) return true;
+      if (!parent || parent.closest('#pane-side') || !visible(node)) {
+        node = walker.nextNode();
+        continue;
+      }
+      const added = value.match(/^you added\s+(.+)$/i);
+      if (added && added[1].trim().toLowerCase() === wantedName) return true;
+      if (/^already added to group$/i.test(value)) {
+        let box = parent;
+        for (let depth = 0; depth < 6 && box; depth += 1) {
+          const lines = (box.innerText || '').split('\n').map((line) => line.trim().toLowerCase()).filter(Boolean);
+          if (lines.includes(wantedName) && lines.includes('already added to group')) return true;
+          if ((box.innerText || '').length > 180) break;
+          box = box.parentElement;
+        }
       }
       node = walker.nextNode();
     }
     return false;
-  }).catch(() => false);
+  }, wanted).catch(() => false);
+}
+
+async function scrollContactForm(page) {
+  await page.evaluate(() => {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    let heading = null;
+    while (node) {
+      if (/^new contact$/i.test((node.textContent || '').replace(/\s+/g, ' ').trim())) {
+        heading = node.parentElement;
+        break;
+      }
+      node = walker.nextNode();
+    }
+    let panel = heading;
+    while (panel && panel !== document.body) {
+      if (panel.scrollHeight > panel.clientHeight + 30) {
+        panel.scrollTop = panel.scrollHeight;
+        return;
+      }
+      panel = panel.parentElement;
+    }
+  }).catch(() => {});
+}
+
+async function openNumberedContact(page, nationalNumber) {
+  const digits = String(nationalNumber || '').replace(/\D/g, '');
+  if (digits.length < 8) return false;
+  await page.keyboard.press('Escape').catch(() => {});
+  await pause(page, 400);
+  const newChat = page.getByRole('button', { name: /new chat/i }).first();
+  if (!(await newChat.isVisible().catch(() => false))) return false;
+  const clicked = await newChat.click({ timeout: 5000 }).then(() => true).catch(() => false);
+  if (!clicked) return false;
+  await pause(page, 1000);
+  const search = page.getByPlaceholder(/search name or number/i).last();
+  if (!(await search.isVisible().catch(() => false))) return false;
+  await search.click({ timeout: 4000 }).catch(() => {});
+  await search.fill('');
+  await search.pressSequentially(digits, { delay: 70 });
+  await pause(page, 2500);
+  const addRow = page.getByText(/^new contact$|^add contact$/i).last();
+  if (await addRow.isVisible().catch(() => false)) {
+    await addRow.click({ timeout: 5000 }).catch(() => {});
+    return true;
+  }
+  return false;
+}
+
+async function phoneAlreadyListed(page, phone) {
+  const digits = String(phone || '').replace(/\D/g, '').slice(-10);
+  if (digits.length < 8) return false;
+  const tail = `${digits.slice(0, 5)} ${digits.slice(5)}`;
+  const byRole = page.getByRole('textbox', { name: /search or start a new chat/i }).first();
+  const byPlaceholder = page.getByPlaceholder(/search or start a new chat/i).first();
+  const search = await byRole.isVisible().catch(() => false) ? byRole : byPlaceholder;
+  if (!(await search.isVisible().catch(() => false))) return false;
+  await search.click().catch(() => {});
+  await search.fill('').catch(() => {});
+  await search.pressSequentially(digits, { delay: 70 });
+  await pause(page, 2500);
+  const listed = await page.locator('#pane-side').getByText(tail, { exact: false }).first().isVisible().catch(() => false);
+  await page.keyboard.press('Escape').catch(() => {});
+  await pause(page, 600);
+  return listed;
+}
+
+async function dismissSyncBanner(page) {
+  const banner = page.getByText(/turn on background sync/i).first();
+  if (!(await banner.isVisible().catch(() => false))) return;
+  const point = await page.evaluate(() => {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    while (node) {
+      const value = (node.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!/turn on background sync/i.test(value) || !node.parentElement) {
+        node = walker.nextNode();
+        continue;
+      }
+      const host = node.parentElement.closest('div');
+      const icon = host?.querySelector('[data-icon="x"], [data-icon="x-alt"], [aria-label="Close"]');
+      const rect = (icon || host)?.getBoundingClientRect();
+      if (!rect || rect.width < 8) return null;
+      return { x: rect.right - 16, y: rect.top + 16 };
+    }
+    return null;
+  }).catch(() => null);
+  if (point) await page.mouse.click(point.x, point.y).catch(() => {});
+  await pause(page, 500);
+}
+
+async function findPhoneField(page) {
+  const phoneBox = page.getByRole('textbox', { name: /^phone$|phone number|mobile/i }).first();
+  if (await phoneBox.isVisible().catch(() => false)) return phoneBox;
+  const placeholder = page.getByPlaceholder(/phone|mobile/i).first();
+  if (await placeholder.isVisible().catch(() => false)) return placeholder;
+  const tel = page.locator('input[type="tel"], input[inputmode="tel"]').last();
+  if (await tel.isVisible().catch(() => false) && !(await tel.evaluate((el) => Boolean(el.closest('#pane-side'))).catch(() => true))) {
+    return tel;
+  }
+  const boxes = page.locator('[role="textbox"], input, textarea, [contenteditable="true"]');
+  const count = await boxes.count();
+  for (let index = 0; index < count; index += 1) {
+    const box = boxes.nth(index);
+    if (!(await box.isVisible().catch(() => false))) continue;
+    const inChatList = await box.evaluate((el) => Boolean(el.closest('#pane-side'))).catch(() => true);
+    if (inChatList) continue;
+    const label = [
+      await box.getAttribute('aria-label').catch(() => ''),
+      await box.getAttribute('placeholder').catch(() => ''),
+      await box.getAttribute('aria-placeholder').catch(() => ''),
+    ].join(' ');
+    if (/first name|last name|username|search/i.test(label)) continue;
+    if (/phone|mobile/i.test(label)) return box;
+  }
+  return null;
 }
 
 async function clickPrivateInvite(page) {
@@ -693,129 +843,37 @@ async function confirmAddDialog(page) {
   return true;
 }
 
-async function keepOnlyNamedContact(page, name) {
-  const plan = await page.evaluate((wanted) => {
-    const target = String(wanted || '').trim().toLowerCase();
-    if (!target) return { select: null, removes: [] };
-    const exact = [];
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    let node = walker.nextNode();
-    while (node) {
-      const value = (node.textContent || '').replace(/\s+/g, ' ').trim();
-      const parent = node.parentElement;
-      if (value.toLowerCase() !== target || !parent || parent.closest('#pane-side, input, textarea, [contenteditable="true"]')) {
-        node = walker.nextNode();
-        continue;
-      }
-      const range = document.createRange();
-      range.selectNodeContents(node);
-      const rect = range.getBoundingClientRect();
-      if (rect.width >= 4 && rect.height >= 4) {
-        exact.push({
-          x: rect.x + rect.width / 2,
-          y: rect.y + rect.height / 2,
-          top: rect.top,
-        });
-      }
-      node = walker.nextNode();
-    }
-    exact.sort((a, b) => a.top - b.top);
-    const row = exact.length ? exact[exact.length - 1] : null;
-    const topMatch = exact[0];
-    const hasChip = Boolean(topMatch) && exact.some((hit) => hit.top - topMatch.top > 24);
-    const removes = [];
-    for (const icon of document.querySelectorAll('[data-icon="x"], [data-icon="x-alt"], [data-icon="x-small"]')) {
-      if (icon.closest('#pane-side')) continue;
-      const chip = icon.closest('div');
-      const label = (chip?.innerText || '').replace(/\s+/g, ' ').trim().toLowerCase();
-      if (!label || label === target || label.length > 80) continue;
-      const rect = icon.getBoundingClientRect();
-      if (rect.width < 8 || rect.height < 8) continue;
-      removes.push({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
-    }
-    return { select: hasChip ? null : row, removes, found: exact.length > 0 };
-  }, name).catch(() => ({ select: null, removes: [], found: false }));
-
-  for (const point of plan.removes || []) {
-    await page.mouse.click(point.x, point.y).catch(() => {});
+async function focusNamedContact(page, name) {
+  let plan = await page.evaluate(planAddMemberDialog, name).catch(() => ({ open: false, confirm: null, removes: [], select: null }));
+  if (plan?.select) {
+    await clickPoint(page, plan.select);
+    await pause(page, 500);
+    plan = await page.evaluate(planAddMemberDialog, name).catch(() => plan);
+  }
+  for (const point of plan?.removes || []) {
+    await clickPoint(page, point);
     await pause(page, 300);
   }
-  if (!plan.found) return false;
-  if (!plan.select) return true;
-  await page.mouse.click(plan.select.x, plan.select.y).catch(() => {});
-  await pause(page, 500);
+  if ((plan?.removes || []).length) {
+    plan = await page.evaluate(planAddMemberDialog, name).catch(() => plan);
+  }
+  return plan;
+}
+
+async function clickPoint(page, point) {
+  if (!point) return false;
+  await page.mouse.click(point.x, point.y).catch(() => {});
   return true;
 }
 
-async function addMemberConfirmPoint(page) {
-  return page.evaluate(() => {
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    let node = walker.nextNode();
-    let heading = null;
-    while (node) {
-      const value = (node.textContent || '').replace(/\s+/g, ' ').trim();
-      const parent = node.parentElement;
-      if (/^add member$/i.test(value) && parent && !parent.closest('#pane-side')) {
-        const rect = parent.getBoundingClientRect();
-        if (rect.width >= 8 && rect.height >= 8) {
-          heading = parent;
-          break;
-        }
-      }
-      node = walker.nextNode();
-    }
-    if (!heading) return { open: false, point: null };
-    let panel = heading;
-    let box = null;
-    while (panel && panel !== document.body) {
-      const rect = panel.getBoundingClientRect();
-      const hasSearch = Boolean(panel.querySelector('input, textarea, [contenteditable="true"]'));
-      if (hasSearch && rect.width >= 240 && rect.height >= 220 && rect.width < window.innerWidth * 0.92) box = panel;
-      panel = panel.parentElement;
-    }
-    if (!box) return { open: true, point: null };
-    const boxRect = box.getBoundingClientRect();
-    const hits = [];
-    const push = (rect, prefer) => {
-      if (rect.width < 28 || rect.height < 28) return;
-      if (rect.x < boxRect.x + boxRect.width * 0.45) return;
-      hits.push({
-        x: rect.x + rect.width / 2,
-        y: rect.y + rect.height / 2,
-        prefer,
-        area: rect.width * rect.height,
-      });
-    };
-    for (const icon of box.querySelectorAll('[data-icon]')) {
-      if (!/check/i.test(icon.getAttribute('data-icon') || '')) continue;
-      const target = icon.closest('button, [role="button"]') || icon.parentElement || icon;
-      push(target.getBoundingClientRect(), 3);
-    }
-    for (const el of box.querySelectorAll('button, [role="button"], div, span')) {
-      const label = (el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
-      const text = [...el.childNodes].filter((child) => child.nodeType === 3).map((child) => child.textContent || '').join(' ').replace(/\s+/g, ' ').trim();
-      const rect = el.getBoundingClientRect();
-      const labeled = /^add member$/i.test(label) || /^confirm$|^done$/i.test(label) || /^add member$/i.test(text);
-      const round = rect.width >= 36 && rect.width <= 80 && rect.height >= 36 && rect.height <= 80
-        && Math.abs(rect.width - rect.height) < 14
-        && rect.bottom > boxRect.bottom - 96
-        && rect.right > boxRect.right - 140;
-      if (labeled) push(rect, 2);
-      else if (round) push(rect, 1);
-    }
-    hits.sort((a, b) => b.prefer - a.prefer || b.area - a.area);
-    return { open: true, point: hits[0] || null };
-  }).catch(() => ({ open: false, point: null }));
+async function closeAddMemberDialog(page) {
+  const plan = await page.evaluate(planAddMemberDialog, '').catch(() => null);
+  if (plan?.close) await clickPoint(page, plan.close);
+  await pause(page, 400);
+  if (await addMemberPickerOpen(page)) await page.keyboard.press('Escape').catch(() => {});
 }
 
 async function addMemberPickerOpen(page) {
-  const found = await addMemberConfirmPoint(page);
-  return Boolean(found?.open);
-}
-
-async function clickAddConfirm(page) {
-  const found = await addMemberConfirmPoint(page);
-  if (!found?.point) return false;
-  await page.mouse.click(found.point.x, found.point.y).catch(() => {});
-  return true;
+  const plan = await page.evaluate(planAddMemberDialog, '').catch(() => ({ open: false }));
+  return Boolean(plan?.open);
 }
