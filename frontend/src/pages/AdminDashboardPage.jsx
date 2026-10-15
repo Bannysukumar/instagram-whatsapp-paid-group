@@ -117,10 +117,9 @@ export function AdminDashboardPage() {
   }, [navigate]);
 
   useEffect(() => {
-    if (!waView && !automation?.queueLength && !automation?.checking) return undefined;
-    const timer = setTimeout(() => load(query), 4000);
-    return () => clearTimeout(timer);
-  }, [automation?.queueLength, automation?.activeJobId, automation?.checking, automation?.lastCheckedAt, query, waView]);
+    const timer = setInterval(() => load(query), 3000);
+    return () => clearInterval(timer);
+  }, [query]);
 
   useEffect(() => {
     if (waView !== 'scanner') return undefined;

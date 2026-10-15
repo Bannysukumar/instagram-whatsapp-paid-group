@@ -495,14 +495,7 @@ async function addPersonWhoCanJoin(page, { groupName, phone, inviteLink, contact
     return { outcome: 'not_selectable', reason: 'number_not_recognized', contact: { ...contact, ...verified } };
   }
 
-  const namePattern = new RegExp(escapeRegExp(savedName), 'i');
-  let picked = await clickExactText(page, namePattern, { skipChatList: true, skipEditable: true });
-  if (!picked) {
-    const named = dialog.getByText(savedName, { exact: false }).first();
-    picked = await named.isVisible().catch(() => false)
-      ? await named.click({ timeout: 8000 }).then(() => true).catch(() => false)
-      : false;
-  }
+  const picked = await keepOnlyNamedContact(page, savedName);
   if (!picked) {
     await input.fill('').catch(() => {});
     const digits = String(phone || '').replace(/\D/g, '').slice(-10);
@@ -522,9 +515,11 @@ async function addPersonWhoCanJoin(page, { groupName, phone, inviteLink, contact
     return { outcome: 'added_confirmed', reason: 'already_in_group', contact: { ...contact, ...verified } };
   }
   setLiveActivity('Confirming the add');
-  await pause(page, 2000);
+  await pause(page, 1000);
+  await keepOnlyNamedContact(page, savedName);
   const confirmed = await clickAddConfirm(page);
   if (!confirmed) {
+    await page.keyboard.press('Escape').catch(() => {});
     const sent = await sendPrivateInvite(page, contact, verified);
     if (sent) return sent;
     return { outcome: 'ui_unavailable', reason: 'add_control_missing', contact: { ...contact, ...verified } };
@@ -694,27 +689,84 @@ async function confirmAddDialog(page) {
   return true;
 }
 
+async function keepOnlyNamedContact(page, name) {
+  const plan = await page.evaluate((wanted) => {
+    const target = String(wanted || '').trim().toLowerCase();
+    if (!target) return { select: null, removes: [] };
+    const exact = [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    while (node) {
+      const value = (node.textContent || '').replace(/\s+/g, ' ').trim();
+      const parent = node.parentElement;
+      if (value.toLowerCase() !== target || !parent || parent.closest('#pane-side, input, textarea, [contenteditable="true"]')) {
+        node = walker.nextNode();
+        continue;
+      }
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rect = range.getBoundingClientRect();
+      if (rect.width >= 4 && rect.height >= 4) {
+        exact.push({
+          x: rect.x + rect.width / 2,
+          y: rect.y + rect.height / 2,
+          top: rect.top,
+        });
+      }
+      node = walker.nextNode();
+    }
+    exact.sort((a, b) => a.top - b.top);
+    const row = exact.length ? exact[exact.length - 1] : null;
+    const topMatch = exact[0];
+    const hasChip = Boolean(topMatch) && exact.some((hit) => hit.top - topMatch.top > 24);
+    const removes = [];
+    for (const icon of document.querySelectorAll('[data-icon="x"], [data-icon="x-alt"], [data-icon="x-small"]')) {
+      if (icon.closest('#pane-side')) continue;
+      const chip = icon.closest('div');
+      const label = (chip?.innerText || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      if (!label || label === target || label.length > 80) continue;
+      const rect = icon.getBoundingClientRect();
+      if (rect.width < 8 || rect.height < 8) continue;
+      removes.push({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
+    }
+    return { select: hasChip ? null : row, removes, found: exact.length > 0 };
+  }, name).catch(() => ({ select: null, removes: [], found: false }));
+
+  for (const point of plan.removes || []) {
+    await page.mouse.click(point.x, point.y).catch(() => {});
+    await pause(page, 300);
+  }
+  if (!plan.found) return false;
+  if (!plan.select) return true;
+  await page.mouse.click(plan.select.x, plan.select.y).catch(() => {});
+  await pause(page, 500);
+  return true;
+}
+
 async function clickAddConfirm(page) {
   const point = await page.evaluate(() => {
     const hits = [];
-    for (const el of document.querySelectorAll('button, [role="button"]')) {
-      if (el.closest('#pane-side')) continue;
-      const label = (el.getAttribute('aria-label') || el.innerText || '').replace(/\s+/g, ' ').trim();
-      const iconName = el.querySelector('[data-icon]')?.getAttribute('data-icon') || '';
+    const consider = (el, prefer) => {
+      if (!el || el.closest('#pane-side')) return;
       const rect = el.getBoundingClientRect();
-      if (rect.width < 24 || rect.height < 24) continue;
-      const isCheck = /check/i.test(iconName);
-      const isAdd = /^add member$/i.test(label);
-      if (isCheck || (isAdd && rect.width <= 180)) {
-        hits.push({
-          x: rect.x + rect.width / 2,
-          y: rect.y + rect.height / 2,
-          bottom: rect.bottom,
-          check: isCheck ? 1 : 0,
-        });
-      }
+      if (rect.width < 16 || rect.height < 16 || rect.x < window.innerWidth * 0.35) return;
+      hits.push({
+        x: rect.x + rect.width / 2,
+        y: rect.y + rect.height / 2,
+        bottom: rect.bottom,
+        prefer,
+      });
+    };
+    for (const icon of document.querySelectorAll('[data-icon]')) {
+      const iconName = icon.getAttribute('data-icon') || '';
+      if (!/check/i.test(iconName)) continue;
+      consider(icon.closest('button, [role="button"]') || icon, 2);
     }
-    hits.sort((a, b) => b.check - a.check || b.bottom - a.bottom);
+    for (const el of document.querySelectorAll('button, [role="button"]')) {
+      const label = (el.getAttribute('aria-label') || el.innerText || '').replace(/\s+/g, ' ').trim();
+      if (/^add member$/i.test(label) || /^confirm$|^done$/i.test(label)) consider(el, 1);
+    }
+    hits.sort((a, b) => b.prefer - a.prefer || b.bottom - a.bottom);
     return hits[0] || null;
   }).catch(() => null);
   if (!point) return false;

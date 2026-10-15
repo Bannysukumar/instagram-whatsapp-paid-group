@@ -140,6 +140,7 @@ export function createAutomation({ dataDir }) {
         }
         try {
           const result = await tryAddParticipant(page, args);
+          await page.keyboard.press('Escape').catch(() => {});
           setLiveActivity('WhatsApp is idle');
           state.screenshotFile = await saveShot(dataDir, page, 'last-add.png').catch(() => state.screenshotFile);
           return result;
