@@ -5,7 +5,7 @@ import dotenv from 'dotenv';
 import { createApp } from './app.js';
 import { assertConfig, loadConfig } from './config/index.js';
 import { createQueue } from './automation/queue.js';
-import { createMembershipHandler, markJobCrashed, resumeProcessingQueue } from './automation/membershipRunner.js';
+import { createMembershipHandler, markJobCrashed, resumeLoginHolds, startLoginWatch } from './automation/membershipRunner.js';
 import { closeContext } from './automation/browser.js';
 import { createRazorpayClient } from './services/paymentService.js';
 import { createStore } from './services/store.js';
@@ -37,7 +37,8 @@ const startupSettings = await store.getSettings();
 if (startupSettings.queuePaused) {
   queue.pause(startupSettings.queuePauseReason || 'whatsapp_limit');
 }
-const resumed = await resumeProcessingQueue(store, queue);
+const resumed = await resumeLoginHolds(store, queue);
+if (automation) startLoginWatch({ store, queue, automation });
 
 const paymentClient = config.paymentsEnabled ? await createRazorpayClient(config) : null;
 const staticDir = path.join(projectRoot, 'frontend', 'dist');

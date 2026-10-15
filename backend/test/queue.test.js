@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { createQueue } from '../src/automation/queue.js';
-import { resumeProcessingQueue } from '../src/automation/membershipRunner.js';
+import { continueAfterLogin, resumeLoginHolds, resumeProcessingQueue } from '../src/automation/membershipRunner.js';
 import { createMemoryStore } from '../src/services/memoryStore.js';
 
 describe('queue', () => {
@@ -101,5 +101,60 @@ describe('queue', () => {
     await queue.whenIdle();
     assert.equal(count, 2);
     assert.deepEqual(seen, ['reg_old', 'reg_new']);
+  });
+
+  it('continues people who were waiting for a scan once WhatsApp is connected', async () => {
+    const store = createMemoryStore();
+    const seen = [];
+    const queue = createQueue({
+      handler: async (job) => {
+        seen.push(job.id);
+      },
+    });
+    await store.createRegistration({
+      id: 'reg_hold',
+      name: 'Hold',
+      phoneE164: '+14155550110',
+      status: 'processing',
+      createdAt: '2026-03-01T00:00:00.000Z',
+    });
+    await store.createRegistration({
+      id: 'reg_old_login',
+      name: 'Old login',
+      phoneE164: '+14155550111',
+      status: 'invite_ready',
+      actionNote: 'qr_login_required',
+      createdAt: '2026-02-01T00:00:00.000Z',
+    });
+    queue.pause('qr_login_required');
+    const resumed = await continueAfterLogin({
+      store,
+      queue,
+      automation: { async checkSession() { return { state: 'authenticated' }; } },
+    });
+    await queue.whenIdle();
+    assert.equal(resumed, 1);
+    assert.deepEqual(seen, ['reg_hold']);
+    assert.equal(queue.paused, false);
+    await store.updateRegistration('reg_hold', { status: 'joined_confirmed' });
+
+    const broughtBack = await resumeLoginHolds(store, queue);
+    await queue.whenIdle();
+    assert.equal(broughtBack, 1);
+    assert.deepEqual(seen, ['reg_hold', 'reg_old_login']);
+  });
+
+  it('does not resume a WhatsApp slow-down pause when the session is connected', async () => {
+    const store = createMemoryStore();
+    const queue = createQueue({ handler: async () => {} });
+    queue.pause('whatsapp_limit');
+    const resumed = await continueAfterLogin({
+      store,
+      queue,
+      automation: { async checkSession() { return { state: 'authenticated' }; } },
+    });
+    assert.equal(resumed, 0);
+    assert.equal(queue.paused, true);
+    assert.equal(queue.pauseReason, 'whatsapp_limit');
   });
 });

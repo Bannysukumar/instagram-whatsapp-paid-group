@@ -13,6 +13,31 @@ export function createMembershipHandler({ store, config, automation, queue }) {
       whatsapp: config.directAddEnabled ? automation : null,
     });
 
+    if (result.holdForLogin) {
+      await store.updateRegistration(registration.id, {
+        status: 'processing',
+        action: result.action,
+        actionNote: result.actionNote,
+        failureCode: null,
+        failureMessage: null,
+        retryable: false,
+      });
+      await store.addLog({
+        level: 'info',
+        event: 'membership_waiting_for_login',
+        registrationId: registration.id,
+        detail: { status: 'processing' },
+      });
+      if (queue && queue.pauseReason !== 'whatsapp_limit') {
+        queue.pause('qr_login_required');
+        await store.saveSettings({
+          queuePaused: true,
+          queuePauseReason: 'qr_login_required',
+        });
+      }
+      return;
+    }
+
     await store.updateRegistration(registration.id, {
       status: result.status,
       action: result.action,
@@ -68,6 +93,55 @@ export async function resumeProcessingQueue(store, queue) {
     if (queue.enqueue({ id: row.id, type: 'membership' }).accepted) count += 1;
   }
   return count;
+}
+
+export async function resumeLoginHolds(store, queue) {
+  const stalled = await store.listRegistrations({
+    status: 'invite_ready',
+    limit: 500,
+    oldestFirst: true,
+  });
+  for (const row of stalled) {
+    if (row.actionNote !== 'qr_login_required') continue;
+    await store.updateRegistration(row.id, {
+      status: 'processing',
+      actionNote: 'Waiting for the WhatsApp login. This person stays in line.',
+      failureCode: null,
+      failureMessage: null,
+      retryable: false,
+    });
+  }
+  return resumeProcessingQueue(store, queue);
+}
+
+let loginTimer = null;
+let loginCheckRunning = false;
+
+export function startLoginWatch({ store, queue, automation }) {
+  if (loginTimer || !automation?.checkSession) return;
+  loginTimer = setInterval(() => {
+    continueAfterLogin({ store, queue, automation }).catch(() => {});
+  }, 20000);
+  if (typeof loginTimer.unref === 'function') loginTimer.unref();
+}
+
+export async function continueAfterLogin({ store, queue, automation }) {
+  if (loginCheckRunning) return 0;
+  if (!queue?.paused || queue.pauseReason !== 'qr_login_required') return 0;
+  if (queue.activeId) return 0;
+  loginCheckRunning = true;
+  try {
+    const session = await automation.checkSession();
+    if (session?.state !== 'authenticated') return 0;
+    await store.saveSettings({ queuePaused: false, queuePauseReason: null });
+    const count = await resumeProcessingQueue(store, queue);
+    queue.resume();
+    return count;
+  } catch {
+    return 0;
+  } finally {
+    loginCheckRunning = false;
+  }
 }
 
 export async function markJobCrashed(store, job) {

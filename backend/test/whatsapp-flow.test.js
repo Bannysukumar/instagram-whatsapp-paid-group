@@ -67,7 +67,7 @@ describe('membership outcomes', () => {
     assert.equal(result.contactSavedName, 'Group Test');
   });
 
-  it('still offers the group link when WhatsApp Web is waiting for a QR scan', async () => {
+  it('keeps the person in line when WhatsApp Web is waiting for a QR scan', async () => {
     const result = await processMembership({
       registration: baseRegistration,
       settings,
@@ -78,10 +78,11 @@ describe('membership outcomes', () => {
         },
       },
     });
-    assert.equal(result.status, 'invite_ready');
-    assert.equal(result.action, 'direct_add_unavailable');
-    assert.equal(result.actionNote, 'qr_login_required');
-    assert.equal(result.retryable, true);
+    assert.equal(result.status, 'processing');
+    assert.equal(result.holdForLogin, true);
+    assert.equal(result.pauseQueue, true);
+    assert.equal(result.pauseReason, 'qr_login_required');
+    assert.equal(result.retryable, false);
   });
 
   it('records a retryable browser failure without confirming membership', async () => {
@@ -122,6 +123,29 @@ describe('membership outcomes', () => {
     assert.equal(result.actionNote, 'contact_visible; group_not_found');
     assert.equal(result.contactSaved, true);
     assert.equal(result.retryable, true);
+  });
+
+  it('sends the group invitation when WhatsApp cannot add the contact directly', async () => {
+    const result = await processMembership({
+      registration: baseRegistration,
+      settings,
+      config: { paymentsEnabled: false, directAddEnabled: true },
+      whatsapp: {
+        async checkSession() {
+          return { state: 'authenticated' };
+        },
+        async tryAddParticipant() {
+          return {
+            outcome: 'invite_sent',
+            reason: 'private_invite_sent',
+            contact: { saved: true, reason: 'contact_visible' },
+          };
+        },
+      },
+    });
+    assert.equal(result.status, 'invite_ready');
+    assert.equal(result.actionNote, 'WhatsApp could not add this contact directly, so the group invitation was sent.');
+    assert.equal(result.contactSaved, true);
   });
 
   it('leaves an add click as awaiting confirmation', async () => {

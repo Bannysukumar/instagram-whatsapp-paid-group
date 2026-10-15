@@ -9,6 +9,20 @@ function failure(code, retryable, message) {
   };
 }
 
+function waitingForLogin() {
+  return {
+    status: 'processing',
+    holdForLogin: true,
+    action: 'direct_add_unavailable',
+    actionNote: 'Waiting for the WhatsApp login. This person stays in line.',
+    failureCode: null,
+    failureMessage: null,
+    retryable: false,
+    pauseQueue: true,
+    pauseReason: 'qr_login_required',
+  };
+}
+
 function finishWithInvite({ link, admissionMode, action, actionNote = null }) {
   if (!link) {
     return failure(
@@ -64,13 +78,7 @@ export async function processMembership({ registration, settings, config, whatsa
     return failure('browser_crash', true, 'The automation browser closed unexpectedly. You can retry this task.');
   }
   if (session.state !== 'authenticated') {
-    const pendingLogin = finishWithInvite({
-      link,
-      admissionMode: settings.admissionMode,
-      action: 'direct_add_unavailable',
-      actionNote: 'qr_login_required',
-    });
-    return link ? { ...pendingLogin, retryable: true } : pendingLogin;
+    return waitingForLogin();
   }
 
   let addResult;
@@ -96,13 +104,7 @@ export async function processMembership({ registration, settings, config, whatsa
   }
 
   if (addResult?.outcome === 'session_required') {
-    const pendingLogin = finishWithInvite({
-      link,
-      admissionMode: settings.admissionMode,
-      action: 'direct_add_unavailable',
-      actionNote: 'qr_login_required',
-    });
-    return withContact(link ? { ...pendingLogin, retryable: true } : pendingLogin);
+    return withContact(waitingForLogin());
   }
 
   if (addResult?.outcome === 'rate_limited') {
@@ -161,7 +163,17 @@ export async function processMembership({ registration, settings, config, whatsa
     action: 'direct_add_unavailable',
     actionNote: reason,
   }));
-  if (/interface_changed|add_control_missing|group_not_opened|group_not_found/.test(String(reason))) {
+  if (String(reason).includes('add_control_missing')) {
+    held.actionNote = 'The add button was not available, so the group invitation is ready.';
+    held.retryable = true;
+    return held;
+  }
+  if (String(reason).includes('privacy_restriction')) {
+    held.actionNote = 'WhatsApp could not add this contact directly. The group invitation is ready.';
+    held.retryable = true;
+    return held;
+  }
+  if (/interface_changed|group_not_opened|group_not_found/.test(String(reason))) {
     return { ...held, retryable: true };
   }
   return held;

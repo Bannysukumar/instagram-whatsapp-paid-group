@@ -46,6 +46,10 @@ export function publicMessage(registration, inviteVisible, queueInfo = null) {
     case 'pending_payment':
       return 'Complete payment to continue. The group invitation appears only after the server verifies the payment.';
     case 'processing':
+      if (queueInfo?.paused && queueInfo.pauseReason === 'qr_login_required') {
+        const place = queueInfo.position ? ` You are number ${queueInfo.position} in line.` : '';
+        return `WhatsApp needs a new scan.${place} Adding continues on its own after the administrator scans.`;
+      }
       if (queueInfo?.paused && queueInfo?.position) {
         return `WhatsApp asked to slow down. You are number ${queueInfo.position} in line, and adding continues after the administrator resumes it.`;
       }

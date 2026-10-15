@@ -269,7 +269,11 @@ export function AdminDashboardPage() {
         <p className="muted queue-line">
           {automation?.queueLength ? `${automation.queueLength} waiting` : 'Queue is clear'}
           {automation?.directAddEnabled ? ' · adding from this account' : ' · invitation link only'}
-          {automation?.queuePaused ? ' · paused because WhatsApp asked to slow down' : ''}
+          {automation?.queuePaused
+            ? automation.queuePauseReason === 'qr_login_required'
+              ? ' · waiting for a WhatsApp scan, then the line continues'
+              : ' · paused because WhatsApp asked to slow down'
+            : ''}
         </p>
         <div className="row">
           {automation?.queuePaused && (

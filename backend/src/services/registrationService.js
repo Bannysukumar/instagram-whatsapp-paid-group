@@ -6,7 +6,7 @@ import { sanitizeEmail, sanitizeName } from './sanitize.js';
 async function present(store, registration, queue) {
   const settings = await store.getSettings();
   const queueInfo = registration.status === 'processing' && queue
-    ? { position: queue.position(registration.id), paused: queue.paused }
+    ? { position: queue.position(registration.id), paused: queue.paused, pauseReason: queue.pauseReason }
     : null;
   return publicView(registration, settings.inviteLink, queueInfo);
 }
